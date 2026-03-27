@@ -1,1 +1,336 @@
+(function() {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function playSound(freq, type, duration, vol=0.1) {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + duration);
+    }
 
+    const startScreen = document.getElementById('start-screen');
+    const floatingTitle = document.getElementById('floating-title');
+    const titleLetters = floatingTitle.querySelectorAll('span');
+    const startGameBtn = document.getElementById('start-game-btn');
+    const rebootBtn = document.getElementById('reboot-btn');
+    const corners = {
+        BL: document.getElementById('ee-bl'),
+        TR: document.getElementById('ee-tr'),
+        BR: document.getElementById('ee-br'),
+        TL: document.getElementById('ee-tl')
+    };
+
+    const container = document.getElementById('game-container');
+    const canvas = document.getElementById('bg-canvas');
+    const ctx = canvas.getContext('2d');
+    const paddle = document.getElementById('paddle');
+    const paddleWrap = document.getElementById('paddle-wrapper');
+    const scoreElement = document.getElementById('score');
+    const livesElement = document.getElementById('lives');
+    const comboElement = document.getElementById('combo');
+    const countdownElement = document.getElementById('countdown');
+    const milestoneMenu = document.getElementById('milestone-menu');
+    const discoveryBtn = document.getElementById('discovery-btn');
+    const securityBtn = document.getElementById('security-btn');
+    const gameOverScreen = document.getElementById('game-over');
+    const finalScoreDisplay = document.getElementById('final-score');
+    const highScoreDisplay = document.getElementById('high-score');
+    const maxComboDisplay = document.getElementById('max-combo');
+    const pauseMenu = document.getElementById('pause-menu');
+    const resumeBtn = document.getElementById('resume-btn');
+
+    let score = 0, lives = 3, combo = 0, gameActive = false, isPaused = false, isCountingDown = false;
+    let currentBestScore = 0, sessionMaxCombo = 0;
+    let animationFrameId_stars = null;
+    let activePowerUps = { discovery: false };
+    let sequenceStep = 0, cornerTimer = null;
+
+    function secret() {
+        startScreen.style.display = 'none';
+        container.style.display = 'none';
+
+        const wrapper = document.createElement('div');
+        wrapper.id = 'game-wrapper-ee';
+        wrapper.style.cssText = 'width: 400px; height: 600px; background: #333; position: relative; overflow: hidden; border: 5px solid #555; font-family: "Courier New", Courier, monospace; margin: 0 auto;';
+        wrapper.innerHTML = `
+            <div id='road' style='position: absolute; width: 100%; height: 100%; background: #222;'>
+                <div id='lane-line-ee' style='position: absolute; left: 50%; transform: translateX(-50%); width: 10px; height: 1200px; border-left: 10px dashed #fff; top: -600px;'></div>
+            </div>
+            <div id='player-cart-ee' style='position: absolute; bottom: 20px; left: 175px; width: 50px; height: 80px; background: #f00; border-radius: 8px; box-shadow: 0 0 15px #f00; z-index: 5;'>
+                <div style='position: absolute; top: 10px; left: 5px; width: 40px; height: 25px; background: #88f; border-radius: 4px; border: 2px solid #fff;'></div>
+            </div>
+            <div id='ui-panel-ee' style='position: absolute; top: 10px; left: 10px; color: #0f0; font-size: 18px; z-index: 20;'>SCORE: <span id='score-val-ee'>0</span></div>
+            <div id='menu-overlay-ee' style='position: absolute; inset: 0; background: rgba(0,0,0,0.85); display: flex; flex-direction: column; justify-content: center; align-items: center; color: #fff; z-index: 100;'>
+                <h1 style='color: #ff0;'>RATCHET CART</h1>
+                <button id='action-btn-ee' class='game-button'>START ENGINE</button>
+            </div>`;
+        document.body.appendChild(wrapper);
+
+        const player = document.getElementById('player-cart-ee');
+        const scoreVal = document.getElementById('score-val-ee');
+        const menu = document.getElementById('menu-overlay-ee');
+        const actionBtn = document.getElementById('action-btn-ee');
+        const laneLine = document.getElementById('lane-line-ee');
+
+        let ee_score = 0, ee_active = false, ee_pos = 175, ee_speed = 6, ee_enemies = [], ee_keys = {}, ee_offset = 0;
+
+        document.addEventListener('keydown', (e) => { ee_keys[e.code] = true; });
+        document.addEventListener('keyup', (e) => { ee_keys[e.code] = false; });
+
+        function spawnEnemy() {
+            const colors = ['#0af', '#f0f', '#0f0', '#ff8', '#fff'];
+            const enemy = document.createElement('div');
+            const color = colors[Math.floor(Math.random()*colors.length)];
+            enemy.style.cssText = `position:absolute; width:50px; height:80px; background:${color}; border-radius:8px; top:-100px; left:${Math.random()*350}px; z-index:4; box-shadow:0 0 10px ${color};`;
+            wrapper.appendChild(enemy);
+            ee_enemies.push({el: enemy, top: -100});
+        }
+
+        function updateGame() {
+            if (!ee_active) return;
+            ee_offset = (ee_offset + ee_speed) % 40;
+            laneLine.style.top = (ee_offset - 600) + 'px';
+
+            if (ee_keys['ArrowLeft'] && ee_pos > 0) ee_pos -= 8;
+            if (ee_keys['ArrowRight'] && ee_pos < 350) ee_pos += 8;
+            player.style.left = ee_pos + 'px';
+
+            for (let i = ee_enemies.length-1; i >= 0; i--) {
+                ee_enemies[i].top += ee_speed;
+                ee_enemies[i].el.style.top = ee_enemies[i].top + 'px';
+                const p = player.getBoundingClientRect(), e = ee_enemies[i].el.getBoundingClientRect();
+                if (!(p.right<e.left || p.left>e.right || p.bottom<e.top || p.top>e.bottom)) {
+                    ee_active = false; alert('TOTALED! Score: ' + ee_score); menu.style.display='flex';
+                }
+                if (ee_enemies[i].top > 600) {
+                    ee_enemies[i].el.remove(); ee_enemies.splice(i,1); ee_score++;
+                    scoreVal.innerText = ee_score; if(ee_score%10===0) ee_speed += 0.5;
+                }
+            }
+            if (Math.random() < 0.03) spawnEnemy();
+            requestAnimationFrame(updateGame);
+        }
+
+        actionBtn.onclick = () => {
+            ee_enemies.forEach(en => en.el.remove()); ee_enemies = []; ee_score = 0; ee_speed = 6; ee_pos = 175; scoreVal.innerText = '0';
+            menu.style.display = 'none'; ee_active = true; updateGame();
+        };
+    }
+
+    function anagramTransition() {
+        const target = "RATCHETCARTS";
+        let iteration = 0;
+        const interval = setInterval(() => {
+            titleLetters.forEach((span, i) => {
+                if (iteration > i * 5) {
+                    span.textContent = target[i];
+                    span.style.marginLeft = (i === 7) ? '20px' : '0';
+                    span.style.color = '#ff00ff';
+                    span.style.textShadow = '0 0 20px #ff00ff';
+                } else {
+                    const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+                    span.textContent = letters[Math.floor(Math.random() * 26)];
+                    const r = Math.floor((iteration / 60) * 255);
+                    const g = Math.floor(255 - (iteration / 60) * 255);
+                    span.style.color = `rgb(${r}, ${g}, 255)`;
+                }
+            });
+            if (iteration >= 60) {
+                clearInterval(interval);
+                secret();
+            }
+            iteration++;
+        }, 50);
+        floatingTitle.style.color = '#ff00ff';
+    }
+
+    startScreen.addEventListener('mousemove', (e) => {
+        const rect = startScreen.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left, mouseY = e.clientY - rect.top;
+        const w = rect.width, h = rect.height;
+        let activeCorner = null;
+        if (mouseX < w * 0.1 && mouseY > h * 0.9) activeCorner = 'BL';
+        else if (mouseX > w * 0.9 && mouseY < h * 0.1) activeCorner = 'TR';
+        else if (mouseX > w * 0.9 && mouseY > h * 0.9) activeCorner = 'BR';
+        else if (mouseX < w * 0.1 && mouseY < h * 0.1) activeCorner = 'TL';
+
+        const sequence = ['BL', 'TR', 'BR', 'TL'];
+        if (activeCorner === sequence[sequenceStep] && sequenceStep < 4) {
+            if (!cornerTimer) {
+                cornerTimer = setTimeout(() => {
+                    corners[activeCorner].style.display = 'block';
+                    playSound(660 + (sequenceStep * 100), 'sine', 0.5, 0.05);
+                    sequenceStep++;
+                    if (sequenceStep === 4) anagramTransition();
+                    cornerTimer = null;
+                }, 10000);
+            }
+        } else {
+            clearTimeout(cornerTimer); cornerTimer = null;
+        }
+
+        titleLetters.forEach(letter => {
+            const lRect = letter.getBoundingClientRect();
+            const letterX = (lRect.left + lRect.right) / 2 - rect.left;
+            const letterY = (lRect.top + lRect.bottom) / 2 - rect.top;
+            const dx = letterX - mouseX, dy = letterY - mouseY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const radius = 500;
+            if (distance < radius) {
+                const force = (radius - distance) / radius;
+                letter.style.transform = `translate(${dx * force * 0.8}px, ${dy * force * 0.8}px)`;
+            } else { letter.style.transform = ''; }
+        });
+    });
+
+    function initStars() {
+        canvas.width = container.offsetWidth; canvas.height = container.offsetHeight;
+        stars = Array.from({length: 120}, () => ({ x: Math.random() * canvas.width, y: Math.random() * canvas.height, s: Math.random() * 2.5, o: Math.random() }));
+    }
+
+    function startGame() {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        playSound(440, 'sine', 0.2); startScreen.style.display = 'none';
+        gameOverScreen.style.display = 'none'; milestoneMenu.style.display = 'none';
+        countdownElement.style.display = 'none'; container.style.display = 'block';
+        score = 0; lives = 3; combo = 0; sessionMaxCombo = 0;
+        activePowerUps.discovery = false; paddle.style.width = '110px';
+        scoreElement.innerText = 'SCORE: 000'; comboElement.style.opacity = '0';
+        updateLivesDisplay(); gameActive = true; initStars(); drawStars(); loop();
+    }
+
+    function updateLivesDisplay() { livesElement.innerText = 'LIVES: ' + '❤'.repeat(Math.max(0, lives)); }
+
+    function togglePause(forcedState) {
+        if (!gameActive || gameOverScreen.style.display === 'block') return;
+        isPaused = forcedState !== undefined ? forcedState : !isPaused;
+        if (isPaused) { if (animationFrameId_stars) cancelAnimationFrame(animationFrameId_stars); }
+        else { pauseMenu.style.display = 'none'; milestoneMenu.style.display = 'none'; drawStars(); loop(); }
+    }
+
+    function startCooldown() {
+        milestoneMenu.style.display = 'none'; countdownElement.style.display = 'block';
+        isCountingDown = true; let count = 3;
+        function tick() {
+            if (count > 0) { playSound(200 + (3-count)*100, 'sine', 0.1); countdownElement.innerText = count; count--; setTimeout(tick, 1000); }
+            else {
+                playSound(880, 'sine', 0.2); countdownElement.style.display = 'none'; togglePause(false);
+                setTimeout(() => {
+                    isCountingDown = false;
+                    if (gameActive && !isPaused) {
+                         if (activePowerUps.discovery) { setTimeout(() => { paddle.style.width = '110px'; activePowerUps.discovery = false; }, 8000); }
+                         loop();
+                    }
+                }, 1000);
+            }
+        }
+        tick();
+    }
+
+    let stars = [];
+    function drawStars() {
+        ctx.fillStyle = '#000'; ctx.fillRect(0,0,canvas.width,canvas.height);
+        stars.forEach(s => {
+            ctx.fillStyle = `rgba(255, 255, 255, ${s.o})`; ctx.fillRect(s.x, s.y, s.s, s.s);
+            s.y = (s.y + s.s * 0.4) % canvas.height;
+        });
+        if(gameActive && !isPaused) animationFrameId_stars = requestAnimationFrame(drawStars);
+    }
+
+    container.addEventListener('mousemove', (e) => {
+        if (!gameActive || isPaused) return;
+        const rect = container.getBoundingClientRect();
+        let x = e.clientX - rect.left;
+        paddleWrap.style.left = Math.max(55, Math.min(x, rect.width - 55)) + 'px';
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.code === 'Space') {
+            e.preventDefault();
+            if (milestoneMenu.style.display === 'none' && !isCountingDown) {
+                if (isPaused) togglePause(false); else { pauseMenu.style.display = 'block'; togglePause(true); }
+            }
+        }
+    });
+
+    function triggerMilestone() {
+        playSound(523, 'square', 0.5, 0.15); togglePause(true); milestoneMenu.style.display = 'block';
+    }
+
+    discoveryBtn.addEventListener('click', () => { playSound(880, 'sine', 0.3); paddle.style.width = '240px'; activePowerUps.discovery = true; startCooldown(); });
+    securityBtn.addEventListener('click', () => { playSound(880, 'sine', 0.3); lives++; updateLivesDisplay(); startCooldown(); });
+
+    function impactEffect() {
+        const currentWidth = parseInt(paddle.style.width) || 110;
+        paddle.style.height = '8px'; paddle.style.width = (currentWidth + 20) + 'px';
+        setTimeout(() => { paddle.style.height = '14px'; paddle.style.width = currentWidth + 'px'; }, 100);
+    }
+
+    function createExplosion(x, y, color) {
+        for (let i = 0; i < 15; i++) {
+            const p = document.createElement('div');
+            p.style.cssText = `position:absolute; left:${x}px; top:${y}px; width:4px; height:4px; background:${color}; pointer-events:none; z-index:5;`;
+            container.appendChild(p); const angle = Math.random() * Math.PI * 2, velocity = 3 + Math.random() * 5;
+            let px = 0, py = 0, op = 1;
+            function anim() {
+                if (!gameActive || isPaused) { if(!gameActive) p.remove(); else requestAnimationFrame(anim); return; }
+                px += Math.cos(angle) * velocity; py += Math.sin(angle) * velocity; op -= 0.03;
+                p.style.transform = `translate(${px}px, ${py}px)`; p.style.opacity = op;
+                if (op > 0) requestAnimationFrame(anim); else p.remove();
+            }
+            requestAnimationFrame(anim);
+        }
+    }
+
+    function updateCombo() {
+        if (combo > 1) {
+            comboElement.style.opacity = '1'; comboElement.innerText = 'COMBO x' + combo;
+            const progress = Math.min((combo - 1) / 19, 1), scale = 1 + (progress * 0.5);
+            comboElement.style.transform = `scale(${scale})`;
+            const g = Math.floor(204 * (1 - progress)); comboElement.style.color = `rgb(255, ${g}, 0)`;
+        } else { comboElement.style.opacity = '0'; comboElement.style.color = '#ffcc00'; }
+    }
+
+    function spawnObject() {
+        if (!gameActive || isPaused || isCountingDown) return;
+        const isGold = Math.random() < 0.03; const obj = document.createElement('div'); const size = isGold ? 40 : 16;
+        const x = Math.random() * (container.offsetWidth - size), color = isGold ? 'transparent' : `hsl(${Math.random()*360}, 80%, 60%)`;
+        obj.style.cssText = `position:absolute; top:-50px; left:${x}px; width:${size}px; height:${size}px; background:${color}; box-shadow:0 0 10px ${color}; z-index:5;`;
+        if (isGold) { obj.classList.add('rainbow'); obj.style.clipPath = 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)'; }
+        container.appendChild(obj); let top = -50, speed = 2.5 + Math.sqrt(score / 50);
+        function fall() {
+            if (!gameActive) { obj.remove(); return; } if (isPaused) { requestAnimationFrame(fall); return; }
+            top += speed; obj.style.top = top + 'px';
+            const pRect = paddleWrap.getBoundingClientRect(), oRect = obj.getBoundingClientRect();
+            if (oRect.bottom >= pRect.top && oRect.top <= pRect.bottom && oRect.left <= pRect.right && oRect.right >= pRect.left) {
+                combo++; if (combo > sessionMaxCombo) sessionMaxCombo = combo;
+                score += (isGold ? 50 : 10) * combo; scoreElement.innerText = 'SCORE: ' + score.toString().padStart(3, '0');
+                updateCombo(); if (isGold) triggerMilestone();
+                playSound(isGold ? 880 + (combo*20) : 440 + (combo*20), 'square', 0.1);
+                createExplosion(oRect.left, oRect.top, isGold ? '#fff' : color); impactEffect(); obj.remove(); return;
+            }
+            if (top > container.offsetHeight) {
+                if(!isGold) {
+                    lives--; combo = 0; updateLivesDisplay(); updateCombo(); playSound(150, 'sawtooth', 0.3, 0.2); container.classList.add('shake'); setTimeout(() => container.classList.remove('shake'), 300);
+                    if (lives <= 0) {
+                        gameActive = false; playSound(80, 'sine', 1.0, 0.3); if (score > currentBestScore) currentBestScore = score;
+                        finalScoreDisplay.innerText = 'SCORE: ' + score; highScoreDisplay.innerText = 'BEST SCORE: ' + currentBestScore; maxComboDisplay.innerText = 'BEST COMBO: x' + sessionMaxCombo; gameOverScreen.style.display = 'block';
+                    }
+                } else { combo = 0; updateCombo(); } obj.remove(); return;
+            }
+            requestAnimationFrame(fall);
+        }
+        requestAnimationFrame(fall);
+    }
+
+    let loop = () => { if(gameActive && !isPaused && !isCountingDown) { spawnObject(); let nextSpawn = Math.max(250, 1000 - Math.sqrt(score * 25)); setTimeout(loop, nextSpawn); } };
+    startGameBtn.addEventListener('click', () => { startGame(); });
+    rebootBtn.addEventListener('click', () => { startGame(); });
+    resumeBtn.addEventListener('click', () => togglePause(false));
+    window.addEventListener('resize', initStars);
+})();
