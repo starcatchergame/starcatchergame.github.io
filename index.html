@@ -59,6 +59,12 @@
 <script>
 window.onload = () => {
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function safePlaySound(freq, type, duration, vol=0.1) {
+      if (audioCtx.state === 'suspended') {
+          audioCtx.resume();
+      }
+          playSound(freq, type, duration, vol);
+      }
     function playSound(freq, type, duration, vol=0.1) {
         const osc = audioCtx.createOscillator();
         const gain = audioCtx.createGain();
@@ -68,7 +74,7 @@ window.onload = () => {
         gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
         osc.connect(gain);
         gain.connect(audioCtx.destination);
-        osc.resume();
+        osc.start();
         osc.stop(audioCtx.currentTime + duration);
     }
 
@@ -223,7 +229,7 @@ window.onload = () => {
             if (!cornerTimer) {
                 cornerTimer = setTimeout(() => {
                     corners[activeCorner].style.display = 'block';
-                    playSound(660 + (sequenceStep * 100), 'sine', 0.5, 0.05);
+                    safePlaySound(660 + (sequenceStep * 100), 'sine', 0.5, 0.05);
                     sequenceStep++;
                     if (sequenceStep === 4) anagramTransition();
                     cornerTimer = null;
@@ -254,7 +260,7 @@ window.onload = () => {
 
     function startGame() {
         if (audioCtx.state === 'suspended') audioCtx.resume();
-        playSound(440, 'sine', 0.2); startScreen.style.display = 'none';
+        safePlaySound(440, 'sine', 0.2); startScreen.style.display = 'none';
         gameOverScreen.style.display = 'none'; milestoneMenu.style.display = 'none';
         countdownElement.style.display = 'none'; container.style.display = 'block';
         score = 0; lives = 3; combo = 0; sessionMaxCombo = 0;
@@ -276,9 +282,9 @@ window.onload = () => {
         milestoneMenu.style.display = 'none'; countdownElement.style.display = 'block';
         isCountingDown = true; let count = 3;
         function tick() {
-            if (count > 0) { playSound(200 + (3-count)*100, 'sine', 0.1); countdownElement.innerText = count; count--; setTimeout(tick, 1000); }
+            if (count > 0) { safePlaySound(200 + (3-count)*100, 'sine', 0.1); countdownElement.innerText = count; count--; setTimeout(tick, 1000); }
             else {
-                playSound(880, 'sine', 0.2); countdownElement.style.display = 'none'; togglePause(false);
+                safePlaySound(880, 'sine', 0.2); countdownElement.style.display = 'none'; togglePause(false);
                 setTimeout(() => {
                     isCountingDown = false;
                     if (gameActive && !isPaused) {
@@ -318,11 +324,11 @@ window.onload = () => {
     });
 
     function triggerMilestone() {
-        playSound(523, 'square', 0.5, 0.15); togglePause(true); milestoneMenu.style.display = 'block';
+        safePlaySound(523, 'square', 0.5, 0.15); togglePause(true); milestoneMenu.style.display = 'block';
     }
 
-    discoveryBtn.addEventListener('click', () => { playSound(880, 'sine', 0.3); paddle.style.width = '240px'; activePowerUps.discovery = true; startCooldown(); });
-    securityBtn.addEventListener('click', () => { playSound(880, 'sine', 0.3); lives++; updateLivesDisplay(); startCooldown(); });
+    discoveryBtn.addEventListener('click', () => { safePlaySound(880, 'sine', 0.3); paddle.style.width = '240px'; activePowerUps.discovery = true; startCooldown(); });
+    securityBtn.addEventListener('click', () => { safePlaySound(880, 'sine', 0.3); lives++; updateLivesDisplay(); startCooldown(); });
 
     function impactEffect() {
         const currentWidth = parseInt(paddle.style.width) || 110;
@@ -370,14 +376,14 @@ window.onload = () => {
                 combo++; if (combo > sessionMaxCombo) sessionMaxCombo = combo;
                 score += (isGold ? 50 : 10) * combo; scoreElement.innerText = 'SCORE: ' + score.toString().padStart(3, '0');
                 updateCombo(); if (isGold) triggerMilestone();
-                playSound(isGold ? 880 + (combo*20) : 440 + (combo*20), 'square', 0.1);
+                safePlaySound(isGold ? 880 + (combo*20) : 440 + (combo*20), 'square', 0.1);
                 createExplosion(oRect.left, oRect.top, isGold ? '#fff' : color); impactEffect(); obj.remove(); return;
             }
             if (top > container.offsetHeight) {
                 if(!isGold) {
-                    lives--; combo = 0; updateLivesDisplay(); updateCombo(); playSound(150, 'sawtooth', 0.3, 0.2); container.classList.add('shake'); setTimeout(() => container.classList.remove('shake'), 300);
+                    lives--; combo = 0; updateLivesDisplay(); updateCombo(); safePlaySound(150, 'sawtooth', 0.3, 0.2); container.classList.add('shake'); setTimeout(() => container.classList.remove('shake'), 300);
                     if (lives <= 0) {
-                        gameActive = false; playSound(80, 'sine', 1.0, 0.3); if (score > currentBestScore) currentBestScore = score;
+                        gameActive = false; safePlaySound(80, 'sine', 1.0, 0.3); if (score > currentBestScore) currentBestScore = score;
                         finalScoreDisplay.innerText = 'SCORE: ' + score; highScoreDisplay.innerText = 'BEST SCORE: ' + currentBestScore; maxComboDisplay.innerText = 'BEST COMBO: x' + sessionMaxCombo; gameOverScreen.style.display = 'block';
                     }
                 } else { combo = 0; updateCombo(); } obj.remove(); return;
