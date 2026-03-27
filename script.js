@@ -1,4 +1,5 @@
-(function() {
+window.onload = () => {
+    (function() {
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     function playSound(freq, type, duration, vol=0.1) {
         const osc = audioCtx.createOscillator();
@@ -334,3 +335,4 @@
     resumeBtn.addEventListener('click', () => togglePause(false));
     window.addEventListener('resize', initStars);
 })();
+};
