@@ -1,1 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Star Catcher</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
 
+<div id='start-screen' style='width: 70%; height: 500px; background: #000; position: relative; display: flex; flex-direction: column; justify-content: center; align-items: center; font-family: \"Courier New\", Courier, monospace; color: #00ffcc; box-shadow: inset 0 0 50px #002222; border: 4px solid #00ffcc;'>
+    <h1 id='floating-title' style='font-size: 48px; letter-spacing: 5px; text-shadow: 0 0 20px #00ffcc; display: flex; gap: 10px;'>
+        <span>S</span><span>T</span><span>A</span><span>R</span>
+        <span style='margin-left: 20px;'>C</span><span>A</span><span>T</span><span>C</span><span>H</span><span>E</span><span>R</span>
+    </h1>
+    <p style='font-size: 18px; margin-bottom: 30px;'>Press SPACE to Pause during gameplay.</p>
+    <button id='start-game-btn' class='game-button'>Start Game</button>
+    <!-- Easter Egg Corners -->
+    <div id='ee-bl' style='position: absolute; bottom: 10px; left: 10px; width: 15px; height: 15px; background: #8800ff; display: none; box-shadow: 0 0 10px #8800ff;'></div>
+    <div id='ee-tr' style='position: absolute; top: 10px; right: 10px; width: 15px; height: 15px; background: #8800ff; display: none; box-shadow: 0 0 10px #8800ff;'></div>
+    <div id='ee-br' style='position: absolute; bottom: 10px; right: 10px; width: 15px; height: 15px; background: #8800ff; display: none; box-shadow: 0 0 10px #8800ff;'></div>
+    <div id='ee-tl' style='position: absolute; top: 10px; left: 10px; width: 15px; height: 15px; background: #8800ff; display: none; box-shadow: 0 0 10px #8800ff;'></div>
+</div>
+
+<div id='game-container' style='width: 70%; height: 500px; background: #000; position: relative; overflow: hidden; cursor: crosshair; border: 4px solid #00ffcc; font-family: \"Courier New\", Courier, monospace; color: #fff; box-shadow: inset 0 0 50px #002222; display: none;'>
+    <canvas id='bg-canvas' style='position: absolute; top: 0; left: 0; width: 100%; height: 100%;'></canvas>
+    <div id='countdown' style='display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 120px; font-weight: 900; color: #00ffcc; text-shadow: 0 0 30px #00ffcc; z-index: 300; pointer-events: none;'></div>
+    <div id='ui-left' style='position: absolute; top: 20px; left: 20px; z-index: 10; pointer-events: none;'>
+        <div id='score' style='font-size: 36px; font-weight: 900; color: #00ffcc; text-shadow: 0 0 15px #00ffcc; letter-spacing: 2px;'>SCORE: 000</div>
+        <div id='lives' style='font-size: 22px; color: #ff4444; margin-top: 8px; filter: drop-shadow(0 0 5px #ff4444);'>LIVES: ❤❤❤</div>
+    </div>
+    <div id='ui-right' style='position: absolute; top: 20px; right: 20px; z-index: 10; pointer-events: none; text-align: right;'>
+        <div id='combo' style='font-size: 24px; color: #ffcc00; opacity: 0; transition: transform 0.1s cubic-bezier(0.175, 0.885, 0.32, 1.275), color 0.1s ease-out; transform-origin: top right;'>COMBO x1</div>
+    </div>
+    <div id='milestone-menu' style='display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; text-align: center; z-index: 200; background: rgba(0,10,10,0.95); padding: 40px; border: 2px solid #ff00ff; box-shadow: 0 0 50px #ff00ff;'>
+        <h2 style='font-size: 32px; color: #ff00ff; margin-bottom: 20px; text-shadow: 0 0 10px #ff00ff;'>LEVEL UP: CHOOSE UPGRADE</h2>
+        <button id='discovery-btn' class='game-button' style='border-color: #00ffcc; color: #00ffcc;'>Discover Nebula<br><span style='font-size:12px;'>Expand Paddle</span></button>
+        <button id='security-btn' class='game-button' style='border-color: #ff4444; color: #ff4444;'>Comet Security<br><span style='font-size:12px;'>+1 Extra Life</span></button>
+    </div>
+    <div id='game-over' style='display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; text-align: center; z-index: 100; background: rgba(0,10,10,0.95); padding: 50px; border: 2px solid #00ffcc; box-shadow: 0 0 50px #00ffcc;'>
+        <h1 style='font-size: 64px; margin: 0; letter-spacing: 10px; text-shadow: 0 0 20px #00ffcc;'>STAR CRASH</h1>
+        <div style='margin: 20px 0;'>
+            <p id='final-score' style='font-size: 28px; color: #00ffcc; margin: 5px 0;'></p>
+            <p id='high-score' style='font-size: 18px; color: #ffcc00; margin: 5px 0;'></p>
+            <p id='max-combo' style='font-size: 18px; color: #ff00ff; margin: 5px 0;'></p>
+        </div>
+        <button id='reboot-btn' class='game-button'>Shoot For The Stars!</button>
+    </div>
+    <div id='pause-menu' style='display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; text-align: center; z-index: 100; background: rgba(0,10,10,0.95); padding: 50px; border: 2px solid #00ffcc; box-shadow: 0 0 50px #00ffcc;'>
+        <h2 style='font-size: 48px; margin: 0; letter-spacing: 5px; text-shadow: 0 0 20px #00ffcc;'>PAUSED</h2>
+        <button id='resume-btn' class='game-button'>Resume Game</button>
+    </div>
+    <div id='paddle-wrapper' style='position: absolute; bottom: 25px; left: 50%; transform: translateX(-50%); transition: transform 0.1s ease-out;'>
+        <div id='paddle' style='width: 110px; height: 14px; background: linear-gradient(90deg, #00ffcc, #0088ff); border-radius: 4px; box-shadow: 0 0 30px #00ffcc; transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);'></div>
+    </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
