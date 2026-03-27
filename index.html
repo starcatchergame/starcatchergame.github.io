@@ -57,7 +57,7 @@
 </html>
 
 <script>
-(function() {
+window.onload = () => {
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     function playSound(freq, type, duration, vol=0.1) {
         const osc = audioCtx.createOscillator();
@@ -392,5 +392,5 @@
     rebootBtn.addEventListener('click', () => { startGame(); });
     resumeBtn.addEventListener('click', () => togglePause(false));
     window.addEventListener('resize', initStars);
-})();
+};
 </script>
