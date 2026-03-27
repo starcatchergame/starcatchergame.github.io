@@ -68,7 +68,7 @@ window.onload = () => {
         gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
         osc.connect(gain);
         gain.connect(audioCtx.destination);
-        osc.start();
+        osc.resume();
         osc.stop(audioCtx.currentTime + duration);
     }
 
