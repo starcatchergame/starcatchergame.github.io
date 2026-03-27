@@ -393,6 +393,13 @@ window.onload = () => {
         requestAnimationFrame(fall);
     }
 
+    document.addEventListener('click', () => {
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+        console.log("AudioContext resumed");
+        }
+    }, { once: true });
+
     let loop = () => { if(gameActive && !isPaused && !isCountingDown) { spawnObject(); let nextSpawn = Math.max(250, 1000 - Math.sqrt(score * 25)); setTimeout(loop, nextSpawn); } };
     startGameBtn.addEventListener('click', () => { startGame(); });
     rebootBtn.addEventListener('click', () => { startGame(); });
