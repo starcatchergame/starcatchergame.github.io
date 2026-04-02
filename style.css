@@ -39,6 +39,14 @@ body { margin: 0; background: #111; }
   justify-content: center;
   align-items: center;
   color: var(--cyan);
+  overflow: hidden;
+}
+
+#title-canvas {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
 }
 
 #floating-title {
@@ -48,6 +56,8 @@ body { margin: 0; background: #111; }
   display: flex;
   gap: 10px;
   margin-bottom: 16px;
+  z-index: 2;
+  position: relative;
 }
 
 #floating-title .title-gap { margin-left: 20px; }
@@ -57,6 +67,8 @@ body { margin: 0; background: #111; }
   margin-bottom: 30px;
   color: var(--cyan);
   opacity: 0.8;
+  z-index: 2;
+  position: relative;
 }
 
 .start-actions {
@@ -64,6 +76,8 @@ body { margin: 0; background: #111; }
   gap: 12px;
   flex-wrap: wrap;
   justify-content: center;
+  z-index: 2;
+  position: relative;
 }
 
 /* ── Leaderboard Screen ───────────────────────────────────────────────────── */
@@ -157,6 +171,175 @@ body { margin: 0; background: #111; }
 }
 
 .lb-back { margin-top: 20px; }
+
+/* ── Settings Screen ──────────────────────────────────────────────────────── */
+#settings-screen {
+  width: 100%;
+  height: 700px;
+  background: #000;
+  border: var(--border-glow);
+  box-shadow: var(--inset-glow);
+  font-family: var(--font-game);
+  color: #fff;
+  position: relative;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px 24px 24px;
+  overflow-y: auto;
+}
+
+.settings-heading {
+  font-size: 32px;
+  letter-spacing: 6px;
+  text-shadow: 0 0 20px var(--cyan);
+  color: var(--cyan);
+  margin: 0 0 30px;
+}
+
+.settings-section {
+  width: 100%;
+  max-width: 420px;
+  margin-bottom: 28px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid rgba(0,255,204,0.15);
+}
+
+.settings-section:last-of-type { border-bottom: none; }
+
+.settings-label {
+  font-size: 13px;
+  letter-spacing: 3px;
+  color: var(--gold);
+  margin: 0 0 16px;
+  font-weight: bold;
+}
+
+/* Checkbox rows */
+.settings-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  padding: 6px 0;
+  user-select: none;
+}
+
+.settings-checkbox-row input[type="checkbox"] {
+  display: none;
+}
+
+.custom-checkbox {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--cyan);
+  background: rgba(0,255,204,0.05);
+  flex-shrink: 0;
+  position: relative;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.custom-checkbox::after {
+  content: '';
+  position: absolute;
+  top: 3px; left: 3px;
+  width: 12px; height: 12px;
+  background: var(--cyan);
+  box-shadow: 0 0 8px var(--cyan);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.settings-checkbox-row input:checked + .custom-checkbox::after {
+  opacity: 1;
+}
+
+.settings-checkbox-row:hover .custom-checkbox {
+  box-shadow: 0 0 10px var(--cyan);
+  background: rgba(0,255,204,0.1);
+}
+
+.checkbox-label {
+  font-size: 16px;
+  color: rgba(255,255,255,0.85);
+  letter-spacing: 1px;
+}
+
+.settings-hint {
+  font-size: 11px;
+  color: rgba(255,255,255,0.35);
+  margin: 6px 0 0 34px;
+  letter-spacing: 0.5px;
+}
+
+/* Slider rows */
+.settings-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.slider-label {
+  font-size: 14px;
+  color: rgba(255,255,255,0.7);
+  letter-spacing: 1px;
+  width: 130px;
+  flex-shrink: 0;
+}
+
+.settings-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 6px;
+  background: rgba(0,255,204,0.15);
+  border: 1px solid rgba(0,255,204,0.3);
+  outline: none;
+  cursor: pointer;
+}
+
+.settings-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  background: var(--cyan);
+  box-shadow: 0 0 10px var(--cyan);
+  border: none;
+  cursor: pointer;
+}
+
+.settings-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  background: var(--cyan);
+  box-shadow: 0 0 10px var(--cyan);
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.slider-value {
+  font-size: 14px;
+  color: var(--cyan);
+  width: 40px;
+  text-align: right;
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+
+.settings-back { margin-top: 10px; }
+
+/* Settings open button — neutral accent */
+.settings-open-btn {
+  border-color: #888;
+  color: #aaa;
+}
+.settings-open-btn:hover {
+  background: rgba(255,255,255,0.08);
+  color: #fff;
+}
 
 /* ── Game Container ───────────────────────────────────────────────────────── */
 #game-container {

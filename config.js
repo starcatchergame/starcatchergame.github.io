@@ -31,6 +31,25 @@ const CONFIG = Object.freeze({
     BASE_SPEED:        2.5,
   },
 
+  // v2.1 — Logarithmic difficulty ramping
+  // Difficulty is a weighted blend: 0.65 * scoreFactor + 0.35 * comboFactor
+  // Both factors use log curves so early game ramps noticeably, late game plateaus.
+  DIFFICULTY: {
+    SCORE_WEIGHT:      0.65,
+    COMBO_WEIGHT:      0.35,
+    // Spawn interval: lerp from BASE_SPAWN_MS → MIN_SPAWN_MS as difficulty 0→1
+    // difficulty = W_s * log(1 + score / SCORE_SCALE) / log(1 + SCORE_CAP / SCORE_SCALE)
+    //            + W_c * log(1 + combo / COMBO_SCALE) / log(1 + COMBO_CAP / COMBO_SCALE)
+    SCORE_SCALE:       16000,   // score value at which curve is ~halfway
+    SCORE_CAP:         25000,  // score at which score-factor saturates to 1
+    COMBO_SCALE:       30,     // combo at which curve is ~halfway
+    COMBO_CAP:         40,    // combo at which combo-factor saturates to 1
+    // Fall speed: BASE_SPEED + SPEED_EXTRA * difficulty
+    SPEED_EXTRA:       2.5,
+    // Post-milestone grace period before spawning resumes
+    MILESTONE_GRACE_MS: 600,
+  },
+
   AUDIO: {
     CATCH_BASE_HZ:     440,
     GOLD_BASE_HZ:      880,

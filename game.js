@@ -7,6 +7,7 @@
  *   1. DOM refs
  *   2. Game state
  *   3. Stars (background animation)
+ *   3b. Game background wrappers
  *   4. Paddle
  *   5. UI updates
  *   6. Explosions
@@ -17,7 +18,9 @@
  *  11. Game over + leaderboard UI
  *  12. Game start / reset
  *  13. ???
- *  14. Global listeners
+ *  14. Settings
+ *  15. Global listeners
+ *  16. Title background
  */
 
 window.addEventListener('load', () => {
@@ -35,6 +38,7 @@ window.addEventListener('load', () => {
     leaderboardBtn: document.getElementById('leaderboard-btn'),
     floatingTitle:  document.getElementById('floating-title'),
     titleLetters:   document.querySelectorAll('#floating-title span'),
+    titleCanvas:    document.getElementById('title-canvas'),
 
     // Leaderboard screen
     lbScoresPanel:  document.getElementById('lb-scores-panel'),
@@ -80,7 +84,21 @@ window.addEventListener('load', () => {
     },
 
     // Background music
-    bgMusic: document.getElementById('bg-music'),
+    bgMusic:    document.getElementById('bg-music'),
+    titleMusic: document.getElementById('title-music'),
+    lbMusic:    document.getElementById('lb-music'),
+
+    // Settings screen
+    settingsScreen:    document.getElementById('settings-screen'),
+    settingsBtnStart:  document.getElementById('settings-btn-start'),
+    settingsBtnPause:  document.getElementById('settings-btn-pause'),
+    settingsBtnGO:     document.getElementById('settings-btn-gameover'),
+    settingsBackBtn:   document.getElementById('settings-back-btn'),
+    fancyStarsToggle:  document.getElementById('fancy-stars-toggle'),
+    musicVolumeSlider: document.getElementById('music-volume'),
+    sfxVolumeSlider:   document.getElementById('sfx-volume'),
+    musicVolVal:       document.getElementById('music-vol-val'),
+    sfxVolVal:         document.getElementById('sfx-vol-val'),
   };
 
   const canvasCtx = DOM.canvas.getContext('2d');
@@ -90,13 +108,63 @@ window.addEventListener('load', () => {
   function startMusic() {
     DOM.bgMusic.loop = true;
     DOM.bgMusic.currentTime = 0;
-    DOM.bgMusic.play().catch(() => {});  // may fail before user gesture
+    DOM.bgMusic.play().catch(() => {});
   }
 
   function stopMusic() {
     DOM.bgMusic.pause();
     DOM.bgMusic.currentTime = 0;
   }
+
+  function startTitleMusic() {
+    DOM.titleMusic.loop = true;
+    DOM.titleMusic.currentTime = 0;
+    DOM.titleMusic.play().catch(() => {});
+  }
+
+  function stopTitleMusic() {
+    DOM.titleMusic.pause();
+    DOM.titleMusic.currentTime = 0;
+  }
+
+  function startLbMusic() {
+    DOM.lbMusic.loop = true;
+    DOM.lbMusic.currentTime = 0;
+    DOM.lbMusic.play().catch(() => {});
+  }
+
+  function stopLbMusic() {
+    DOM.lbMusic.pause();
+    DOM.lbMusic.currentTime = 0;
+  }
+
+  // ─── SETTINGS STATE ────────────────────────────────────────────────────────
+
+  const settings = {
+    fancyStars:   true,
+    musicVolume:  0.8,    // 0–1
+    sfxVolume:    0.8,    // 0–1
+    openedFrom:   null,   // 'start' | 'pause' | 'gameover'
+  };
+
+  // Gameplay fancy background (no title glow)
+  const GameBG = createFancyBG({ showTitleGlow: false });
+
+  /** Apply current music volume to all music audio elements. */
+  function applyMusicVolume() {
+    DOM.bgMusic.volume    = settings.musicVolume;
+    DOM.titleMusic.volume = settings.musicVolume;
+    DOM.lbMusic.volume    = settings.musicVolume;
+  }
+
+  /** Apply current SFX volume to AudioManager. */
+  function applySfxVolume() {
+    AudioManager.setVolume(settings.sfxVolume);
+    AudioManager.setMuted(settings.sfxVolume === 0);
+  }
+
+  applyMusicVolume();
+  applySfxVolume();
 
   // ─── 2. GAME STATE ──────────────────────────────────────────────────────────
 
@@ -111,6 +179,7 @@ window.addEventListener('load', () => {
     paused:          false,
     countingDown:    false,
     paddleExpanded:  false,
+    milestoneJustEnded: false,
 
     lbOpenedFromGameOver: false,  // tracks which screen to return to from leaderboard
 
@@ -152,6 +221,34 @@ window.addEventListener('load', () => {
     if (state.starsRaf !== null) {
       cancelAnimationFrame(state.starsRaf);
       state.starsRaf = null;
+    }
+  }
+
+  // ─── 3b. GAME BACKGROUND WRAPPERS ──────────────────────────────────────────
+
+  /** Initialise + start the correct game background. */
+  function startGameBG() {
+    if (settings.fancyStars) {
+      GameBG.init(DOM.canvas);
+      GameBG.start();
+    } else {
+      initStars();
+      drawStars();
+    }
+  }
+
+  /** Stop whichever game background is running. */
+  function stopGameBG() {
+    GameBG.stop();
+    stopStars();
+  }
+
+  /** Handle resize for the active game background. */
+  function resizeGameBG() {
+    if (settings.fancyStars) {
+      GameBG.resize();
+    } else {
+      initStars();
     }
   }
 
@@ -231,6 +328,24 @@ window.addEventListener('load', () => {
 
   // ─── 7. FALLING OBJECTS ─────────────────────────────────────────────────────
 
+  /**
+   * v2.1 — Logarithmic difficulty curve (0–1).
+   * Weighted blend of score-based and combo-based factors.
+   * Losing a combo streak causes a real (but partial) easing of difficulty.
+   */
+  function getDifficulty() {
+    const D = CONFIG.DIFFICULTY;
+    const scoreFactor = Math.min(1,
+      Math.log(1 + state.score / D.SCORE_SCALE) /
+      Math.log(1 + D.SCORE_CAP   / D.SCORE_SCALE)
+    );
+    const comboFactor = Math.min(1,
+      Math.log(1 + state.combo / D.COMBO_SCALE) /
+      Math.log(1 + D.COMBO_CAP   / D.COMBO_SCALE)
+    );
+    return Math.min(1, D.SCORE_WEIGHT * scoreFactor + D.COMBO_WEIGHT * comboFactor);
+  }
+
   function spawnObject() {
     if (!state.active || state.paused || state.countingDown) return;
 
@@ -238,7 +353,8 @@ window.addEventListener('load', () => {
     const size    = isGold ? CONFIG.OBJECTS.GOLD_SIZE : CONFIG.OBJECTS.STAR_SIZE;
     const x       = Math.random() * (DOM.container.offsetWidth - size);
     const color   = isGold ? 'transparent' : `hsl(${Math.random() * 360},80%,60%)`;
-    const speed   = CONFIG.OBJECTS.BASE_SPEED + Math.sqrt(state.score / 50);
+    const diff    = getDifficulty();
+    const speed   = CONFIG.OBJECTS.BASE_SPEED + CONFIG.DIFFICULTY.SPEED_EXTRA * diff;
 
     const obj = document.createElement('div');
     obj.style.cssText = `position:absolute;top:-50px;left:${x}px;width:${size}px;height:${size}px;` +
@@ -306,13 +422,16 @@ window.addEventListener('load', () => {
     requestAnimationFrame(fall);
   }
 
+  /**
+   * v2.1 — Spawn scheduling now uses logarithmic difficulty curve.
+   * interval lerps linearly from BASE_SPAWN_MS (easy) → MIN_SPAWN_MS (hard).
+   */
   function scheduleSpawn() {
     if (!state.active || state.paused || state.countingDown) return;
     spawnObject();
-    const interval = Math.max(
-      CONFIG.GAME.MIN_SPAWN_MS,
-      CONFIG.GAME.BASE_SPAWN_MS - Math.sqrt(state.score * 25)
-    );
+    const diff     = getDifficulty();
+    const range    = CONFIG.GAME.BASE_SPAWN_MS - CONFIG.GAME.MIN_SPAWN_MS;
+    const interval = CONFIG.GAME.MIN_SPAWN_MS + range * (1 - diff);
     state.spawnTimer = setTimeout(scheduleSpawn, interval);
   }
 
@@ -325,6 +444,7 @@ window.addEventListener('load', () => {
 
   function triggerMilestone() {
     AudioManager.play(CONFIG.AUDIO.MILESTONE_HZ, 'square', 0.5, 0.15);
+    state.milestoneJustEnded = true;   // v2.1: flag for post-milestone grace
     pauseGame(/* showMenu= */ false);
     DOM.milestoneMenu.style.display = 'block';
   }
@@ -352,7 +472,7 @@ window.addEventListener('load', () => {
     if (!state.active) return;
     state.paused = true;
     stopSpawning();
-    stopStars();
+    stopGameBG();
     if (showMenu) DOM.pauseMenu.style.display = 'block';
   }
 
@@ -360,7 +480,7 @@ window.addEventListener('load', () => {
     DOM.pauseMenu.style.display  = 'none';
     DOM.milestoneMenu.style.display = 'none';
     state.paused = false;
-    drawStars();
+    startGameBG();
     scheduleSpawn();
   }
 
@@ -369,6 +489,7 @@ window.addEventListener('load', () => {
     e.preventDefault();
     if (!state.active || state.countingDown) return;
     if (DOM.milestoneMenu.style.display === 'block') return;
+    if (DOM.settingsScreen.style.display === 'flex') return;
     if (state.paused) resumeGame();
     else pauseGame(true);
   });
@@ -402,8 +523,15 @@ window.addEventListener('load', () => {
           }, CONFIG.PADDLE.DISCOVERY_DURATION_MS);
         }
 
-        drawStars();
-        scheduleSpawn();
+        startGameBG();
+        // v2.1: after a milestone, delay first spawn so objects don't
+        // land immediately on top of the player.
+        if (state.milestoneJustEnded) {
+          state.milestoneJustEnded = false;
+          state.spawnTimer = setTimeout(scheduleSpawn, CONFIG.DIFFICULTY.MILESTONE_GRACE_MS);
+        } else {
+          scheduleSpawn();
+        }
       }
     }
 
@@ -415,7 +543,7 @@ window.addEventListener('load', () => {
   async function triggerGameOver() {
     state.active = false;
     stopSpawning();
-    stopStars();
+    stopGameBG();
     stopMusic();
     AudioManager.play(CONFIG.AUDIO.GAME_OVER_HZ, 'sine', 1.0, 0.3);
 
@@ -499,8 +627,11 @@ window.addEventListener('load', () => {
       DOM.container.style.display   = 'none';
     } else {
       DOM.startScreen.style.display = 'none';
+      TitleBG.stop();
+      stopTitleMusic();
     }
     DOM.lbScreen.style.display = 'flex';
+    startLbMusic();
   }
 
   DOM.leaderboardBtn.addEventListener('click', () => showLeaderboard(false));
@@ -508,11 +639,14 @@ window.addEventListener('load', () => {
 
   DOM.lbBackBtn.addEventListener('click', () => {
     DOM.lbScreen.style.display = 'none';
+    stopLbMusic();
     if (state.lbOpenedFromGameOver) {
       DOM.container.style.display = 'block';
       DOM.gameOver.style.display = 'block';
     } else {
       DOM.startScreen.style.display = 'flex';
+      if (settings.fancyStars) TitleBG.start();
+      startTitleMusic();
     }
   });
 
@@ -520,10 +654,14 @@ window.addEventListener('load', () => {
 
   function startGame() {
     AudioManager.resume();
+    TitleBG.stop();
+    stopTitleMusic();
+    stopLbMusic();
 
     // Hide all screens / overlays
     DOM.startScreen.style.display    = 'none';
     DOM.lbScreen.style.display       = 'none';
+    DOM.settingsScreen.style.display = 'none';
     DOM.gameOver.style.display       = 'none';
     DOM.milestoneMenu.style.display  = 'none';
     DOM.countdown.style.display      = 'none';
@@ -533,7 +671,7 @@ window.addEventListener('load', () => {
 
     // Reset timers
     stopSpawning();
-    stopStars();
+    stopGameBG();
     clearTimeout(state.discoveryTimer);
 
     // Reset state
@@ -545,8 +683,9 @@ window.addEventListener('load', () => {
       active:          true,
       paused:          false,
       countingDown:    false,
-      paddleExpanded:  false,
-      discoveryTimer:  null,
+      paddleExpanded:      false,
+      milestoneJustEnded:  false,
+      discoveryTimer:      null,
     });
 
     // Reset UI
@@ -556,8 +695,7 @@ window.addEventListener('load', () => {
     updateScore();
     updateLives();
 
-    initStars();
-    drawStars();
+    startGameBG();
     scheduleSpawn();
     startMusic();
   }
@@ -719,12 +857,126 @@ window.addEventListener('load', () => {
     };
   }
 
-  // ─── 14. GLOBAL LISTENERS ───────────────────────────────────────────────────
+  // ─── 14. SETTINGS ───────────────────────────────────────────────────────────
 
-  // Unlock AudioContext on first user interaction
-  document.addEventListener('click', () => AudioManager.resume(), { once: true });
+  function openSettings(from) {
+    settings.openedFrom = from;
+
+    // Sync UI controls with current settings
+    DOM.fancyStarsToggle.checked  = settings.fancyStars;
+    DOM.musicVolumeSlider.value   = Math.round(settings.musicVolume * 100);
+    DOM.sfxVolumeSlider.value     = Math.round(settings.sfxVolume * 100);
+    DOM.musicVolVal.textContent   = Math.round(settings.musicVolume * 100) + '%';
+    DOM.sfxVolVal.textContent     = Math.round(settings.sfxVolume * 100) + '%';
+
+    // Hide the source screen
+    if (from === 'start') {
+      DOM.startScreen.style.display = 'none';
+      TitleBG.stop();
+      stopTitleMusic();
+    } else if (from === 'pause') {
+      DOM.pauseMenu.style.display = 'none';
+    } else if (from === 'gameover') {
+      DOM.gameOver.style.display = 'none';
+    }
+    DOM.settingsScreen.style.display = 'flex';
+  }
+
+  function closeSettings() {
+    DOM.settingsScreen.style.display = 'none';
+    const from = settings.openedFrom;
+
+    if (from === 'start') {
+      DOM.startScreen.style.display = 'flex';
+      if (settings.fancyStars) TitleBG.start();
+      startTitleMusic();
+    } else if (from === 'pause') {
+      DOM.pauseMenu.style.display = 'block';
+    } else if (from === 'gameover') {
+      DOM.gameOver.style.display = 'block';
+    }
+    settings.openedFrom = null;
+  }
+
+  // Open buttons
+  DOM.settingsBtnStart.addEventListener('click', () => openSettings('start'));
+  DOM.settingsBtnPause.addEventListener('click', () => openSettings('pause'));
+  DOM.settingsBtnGO.addEventListener('click',    () => openSettings('gameover'));
+  DOM.settingsBackBtn.addEventListener('click',   closeSettings);
+
+  // ── Fancy Stars toggle ──────────────────────────────────────────────────────
+
+  DOM.fancyStarsToggle.addEventListener('change', () => {
+    settings.fancyStars = DOM.fancyStarsToggle.checked;
+
+    // If toggling while game is paused, we don't restart BG yet —
+    // resumeGame / startGameBG will pick up the new setting.
+    // But if we came from the start screen, update title canvas visibility.
+    if (settings.openedFrom === 'start') {
+      DOM.titleCanvas.style.display = settings.fancyStars ? '' : 'none';
+    }
+  });
+
+  // ── Volume sliders ──────────────────────────────────────────────────────────
+
+  /** Play a short preview tone at the given volume (bypasses AudioManager master). */
+  let _previewCtx = null;
+  function _playPreviewBlip(vol) {
+    if (vol <= 0) return;
+    if (!_previewCtx) _previewCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (_previewCtx.state === 'suspended') _previewCtx.resume();
+    const osc = _previewCtx.createOscillator();
+    const g   = _previewCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(660, _previewCtx.currentTime);
+    g.gain.setValueAtTime(vol * 0.12, _previewCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, _previewCtx.currentTime + 0.08);
+    osc.connect(g);
+    g.connect(_previewCtx.destination);
+    osc.start();
+    osc.stop(_previewCtx.currentTime + 0.08);
+  }
+
+  DOM.musicVolumeSlider.addEventListener('input', () => {
+    settings.musicVolume = DOM.musicVolumeSlider.value / 100;
+    DOM.musicVolVal.textContent = DOM.musicVolumeSlider.value + '%';
+    applyMusicVolume();
+    // Play a test blip at the music volume level
+    _playPreviewBlip(settings.musicVolume);
+  });
+
+  DOM.sfxVolumeSlider.addEventListener('input', () => {
+    settings.sfxVolume = DOM.sfxVolumeSlider.value / 100;
+    DOM.sfxVolVal.textContent = DOM.sfxVolumeSlider.value + '%';
+    applySfxVolume();
+    // Play a test blip so the user hears the level
+    AudioManager.play(660, 'sine', 0.08, 0.12);
+  });
+
+  // ─── 15. GLOBAL LISTENERS ───────────────────────────────────────────────────
+
+  // Unlock AudioContext + start title music on first user interaction
+  document.addEventListener('click', () => {
+    AudioManager.resume();
+    // Only start title music if we're still on the start screen
+    if (DOM.startScreen.style.display !== 'none') {
+      startTitleMusic();
+    }
+  }, { once: true });
 
   // Re-initialise star canvas on resize
-  window.addEventListener('resize', () => { if (state.active) initStars(); });
+  window.addEventListener('resize', () => {
+    if (state.active) resizeGameBG();
+    TitleBG.resize();
+  });
+
+  // ─── 16. TITLE BACKGROUND ──────────────────────────────────────────────────
+
+  TitleBG.init(DOM.titleCanvas);
+  if (settings.fancyStars) {
+    TitleBG.start();
+  } else {
+    DOM.titleCanvas.style.display = 'none';
+  }
 
 }); // end window load

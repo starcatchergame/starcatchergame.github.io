@@ -10,6 +10,7 @@
 
 <!-- ═══════════════════════════════════════════════════════ START SCREEN ═══ -->
 <div id="start-screen">
+  <canvas id="title-canvas"></canvas>
   <h1 id="floating-title">
     <span>S</span><span>T</span><span>A</span><span>R</span>
     <span class="title-gap">C</span><span>A</span><span>T</span><span>C</span><span>H</span><span>E</span><span>R</span>
@@ -18,6 +19,7 @@
   <div class="start-actions">
     <button id="start-game-btn" class="game-button">Start Game</button>
     <button id="leaderboard-btn" class="game-button lb-open-btn">★ Hall of Fame</button>
+    <button id="settings-btn-start" class="game-button settings-open-btn">⚙ Settings</button>
   </div>
 
   <!-- Easter Egg corner triggers -->
@@ -40,6 +42,41 @@
   <div id="lb-combos-panel" class="lb-panel" style="display:none;"></div>
 
   <button id="lb-back-btn" class="game-button lb-back">← Back</button>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ SETTINGS SCREEN ═══ -->
+<div id="settings-screen">
+  <h2 class="settings-heading">⚙ SETTINGS</h2>
+
+  <!-- Visual settings -->
+  <div class="settings-section">
+    <h3 class="settings-label">VISUALS</h3>
+    <label class="settings-checkbox-row">
+      <input type="checkbox" id="fancy-stars-toggle" checked>
+      <span class="custom-checkbox"></span>
+      <span class="checkbox-label">Fancy Effect Stars</span>
+    </label>
+    <p class="settings-hint">Disable to reduce GPU load on slower devices.</p>
+  </div>
+
+  <!-- Audio settings -->
+  <div class="settings-section">
+    <h3 class="settings-label">AUDIO</h3>
+
+    <div class="settings-slider-row">
+      <span class="slider-label">Music Volume</span>
+      <input type="range" id="music-volume" min="0" max="100" value="80" class="settings-slider">
+      <span id="music-vol-val" class="slider-value">80%</span>
+    </div>
+
+    <div class="settings-slider-row">
+      <span class="slider-label">SFX Volume</span>
+      <input type="range" id="sfx-volume" min="0" max="100" value="80" class="settings-slider">
+      <span id="sfx-vol-val" class="slider-value">80%</span>
+    </div>
+  </div>
+
+  <button id="settings-back-btn" class="game-button settings-back">← Back</button>
 </div>
 
 <!-- ══════════════════════════════════════════════════════ GAME CONTAINER ═══ -->
@@ -91,6 +128,7 @@
 
     <div class="game-over-actions">
       <button id="view-lb-btn"  class="game-button lb-open-btn" style="display:none;">★ Hall of Fame</button>
+      <button id="settings-btn-gameover" class="game-button settings-open-btn">⚙ Settings</button>
       <button id="reboot-btn"   class="game-button">Shoot For The Stars!</button>
     </div>
   </div>
@@ -99,6 +137,7 @@
   <div id="pause-menu" class="overlay-panel" style="display:none;">
     <h2 class="overlay-title">PAUSED</h2>
     <button id="resume-btn" class="game-button">Resume Game</button>
+    <button id="settings-btn-pause" class="game-button settings-open-btn">⚙ Settings</button>
   </div>
 
   <!-- Paddle -->
@@ -109,12 +148,15 @@
 </div><!-- /game-container -->
 
 <!-- Background music (loop handled via JS) -->
-<audio id="bg-music" src="music/Color Flash.m4a" preload="auto"></audio>
+<audio id="bg-music"    src="music/Color Flash.m4a" preload="auto"></audio>
+<audio id="title-music" src="music/Comet Ride.m4a"  preload="auto"></audio>
+<audio id="lb-music"    src="music/Hall of Fame.m4a" preload="auto"></audio>
 
 <!-- Load modules in dependency order -->
 <script src="config.js"></script>
 <script src="audio.js"></script>
 <script src="leaderboard.js"></script>
+<script src="title-bg.js"></script>
 <script src="game.js"></script>
 </body>
 </html>
