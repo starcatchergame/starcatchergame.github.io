@@ -508,10 +508,182 @@ body { margin: 0; background: #111; }
 #paddle {
   width: 110px;
   height: 14px;
-  background: linear-gradient(90deg, var(--cyan), #0088ff);
+  background: linear-gradient(90deg,
+    var(--cyan) 0%,
+    #00ccaa 20%,
+    #8844dd 40%,
+    var(--magenta) 50%,
+    #8844dd 60%,
+    #00ccaa 80%,
+    var(--cyan) 100%
+  );
   border-radius: 4px;
-  box-shadow: 0 0 30px var(--cyan);
-  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  box-shadow:
+    0 0 20px var(--cyan),
+    0 0 40px rgba(255,0,255,0.25),
+    inset 0 0 8px rgba(255,0,255,0.3);
+  transition: width 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), height 0.1s ease-out;
+  position: relative;
+  overflow: hidden;
+}
+
+#paddle-center-marker {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 100%;
+  background: rgba(255,0,255,0.9);
+  box-shadow: 0 0 8px var(--magenta), 0 0 16px var(--magenta);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+/* ── Precision floating score ─────────────────────────────────────────────── */
+#precision-float-pool {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  z-index: 15;
+}
+
+.precision-float {
+  position: absolute;
+  font-family: var(--font-game);
+  font-size: 16px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  pointer-events: none;
+  white-space: nowrap;
+  text-shadow: 0 0 8px currentColor;
+  opacity: 0;
+  animation: precision-rise var(--float-dur, 0.8s) ease-out forwards;
+}
+
+@keyframes precision-rise {
+  0%   { opacity: 1; transform: translateY(0) scale(1.2); }
+  60%  { opacity: 0.9; }
+  100% { opacity: 0; transform: translateY(calc(-1 * var(--float-rise, 60px))) scale(0.8); }
+}
+
+/* Precision tiers — color coding */
+.precision-float.tier-perfect { color: var(--magenta); font-size: 22px; }
+.precision-float.tier-great   { color: #cc44ff; font-size: 19px; }
+.precision-float.tier-good    { color: #6688ff; font-size: 16px; }
+.precision-float.tier-ok      { color: var(--cyan); font-size: 14px; }
+
+/* ── Tutorial Overlay ─────────────────────────────────────────────────────── */
+#tutorial-overlay {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: rgba(0,4,8,0.92);
+  z-index: 500;
+  display: none;
+  justify-content: center;
+  align-items: center;
+  font-family: var(--font-game);
+  color: #fff;
+}
+
+#tutorial-inner {
+  max-width: 440px;
+  text-align: center;
+  padding: 30px 36px;
+}
+
+.tutorial-step {
+  display: none;
+}
+.tutorial-step.active {
+  display: block;
+  animation: tutorialFadeIn 0.35s ease-out;
+}
+
+@keyframes tutorialFadeIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.tutorial-step h3 {
+  font-size: 26px;
+  letter-spacing: 4px;
+  margin: 0 0 18px;
+  text-shadow: 0 0 15px currentColor;
+}
+
+.tutorial-step p {
+  font-size: 15px;
+  line-height: 1.7;
+  color: rgba(255,255,255,0.78);
+  margin: 0 0 10px;
+  letter-spacing: 0.5px;
+}
+
+.tutorial-step .tutorial-visual {
+  margin: 20px auto;
+  max-width: 320px;
+}
+
+/* Paddle demo inside tutorial */
+.tutorial-paddle-demo {
+  height: 18px;
+  border-radius: 4px;
+  background: linear-gradient(90deg,
+    var(--cyan) 0%,
+    #00ccaa 20%,
+    #8844dd 40%,
+    var(--magenta) 50%,
+    #8844dd 60%,
+    #00ccaa 80%,
+    var(--cyan) 100%
+  );
+  box-shadow: 0 0 20px var(--cyan), 0 0 30px rgba(255,0,255,0.3);
+  position: relative;
+  margin: 0 auto;
+  width: 220px;
+}
+
+.tutorial-paddle-labels {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 220px;
+  margin: 8px auto 0;
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+.tutorial-paddle-labels .edge-label  { color: var(--cyan); }
+.tutorial-paddle-labels .center-label { color: var(--magenta); font-weight: bold; }
+
+.tutorial-nav {
+  margin-top: 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+#tutorial-dots {
+  display: flex;
+  gap: 10px;
+}
+.tutorial-dot {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--cyan);
+  background: transparent;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+.tutorial-dot.active {
+  background: var(--cyan);
+  box-shadow: 0 0 8px var(--cyan);
+}
+
+#tutorial-next-btn {
+  min-width: 180px;
 }
 
 /* ── Game Button (shared) ─────────────────────────────────────────────────── */
@@ -582,7 +754,7 @@ body { margin: 0; background: #111; }
   40%, 60% { transform: translate3d(8px,  0, 0); }
 }
 
-/* ── Rainbow gold star ────────────────────────────────────────────────────── */
+/* ── Rainbow Chroma gem ────────────────────────────────────────────────────── */
 @keyframes rainbow-glow {
   0%   { background: #ff0000; box-shadow: 0 0 15px #ff0000; }
   16%  { background: #ff8800; box-shadow: 0 0 15px #ff8800; }

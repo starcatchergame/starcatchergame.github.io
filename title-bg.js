@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Star Catcher v2.1 — Fancy Background Factory
+ * Star Catcher v2.2 — Fancy Background Factory
  * Creates independent animated deep-space backgrounds with:
  *   - Parallax star field (3 depth layers)
  *   - Shooting stars with trails
@@ -118,13 +118,24 @@ function createFancyBG(opts = {}) {
       if (n.y < -n.r) n.y = _h + n.r;
       if (n.y > _h + n.r) n.y = -n.r;
 
-      const pulse = 1 + 0.2 * Math.sin(_t * n.pulseSpeed + n.pulseOffset);
-      const r = n.r * pulse;
-      const grad = _ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, r);
-      grad.addColorStop(0,   `hsla(${n.hue}, 80%, 50%, ${n.alpha * 1.5})`);
-      grad.addColorStop(0.4, `hsla(${n.hue}, 70%, 40%, ${n.alpha * 0.8})`);
-      grad.addColorStop(1,   `hsla(${n.hue}, 60%, 30%, 0)`);
-      _ctx.fillStyle = grad;
+      // v2.2: quantize pulse to 20 steps — gradient only rebuilds when step changes
+      const rawPulse = 1 + 0.2 * Math.sin(_t * n.pulseSpeed + n.pulseOffset);
+      const qPulse   = Math.round(rawPulse * 20) / 20;
+      const r = n.r * qPulse;
+
+      // v2.2: reuse cached gradient if radius step hasn't changed
+      if (n._cachedR !== r || n._cachedX !== (n.x | 0) || n._cachedY !== (n.y | 0)) {
+        const cx = n.x | 0, cy = n.y | 0;   // integer coords reduce gradient variance
+        const grad = _ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+        grad.addColorStop(0,   `hsla(${n.hue}, 80%, 50%, ${n.alpha * 1.5})`);
+        grad.addColorStop(0.4, `hsla(${n.hue}, 70%, 40%, ${n.alpha * 0.8})`);
+        grad.addColorStop(1,   `hsla(${n.hue}, 60%, 30%, 0)`);
+        n._cachedGrad = grad;
+        n._cachedR = r;
+        n._cachedX = cx;
+        n._cachedY = cy;
+      }
+      _ctx.fillStyle = n._cachedGrad;
       _ctx.fillRect(n.x - r, n.y - r, r * 2, r * 2);
     });
   }
@@ -163,12 +174,16 @@ function createFancyBG(opts = {}) {
       if (p.y > _h) { p.y = _h; p.vy *= -1; }
     });
 
+    // v2.2: compare squared distances to avoid sqrt per pair;
+    // only sqrt the few pairs that actually need the exact distance for alpha.
+    const LINK_DIST_SQ = LINK_DIST * LINK_DIST;
     for (let i = 0; i < _particles.length; i++) {
       for (let j = i + 1; j < _particles.length; j++) {
         const dx = _particles[i].x - _particles[j].x;
         const dy = _particles[i].y - _particles[j].y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < LINK_DIST) {
+        const distSq = dx * dx + dy * dy;
+        if (distSq < LINK_DIST_SQ) {
+          const dist = Math.sqrt(distSq);
           const a = 0.12 * (1 - dist / LINK_DIST);
           _ctx.strokeStyle = `rgba(0,255,204,${a})`;
           _ctx.lineWidth = 0.6;
@@ -192,11 +207,15 @@ function createFancyBG(opts = {}) {
   function _drawShootingStars() {
     if (Math.random() < SHOOTER_CHANCE) {
       const fromLeft = Math.random() > 0.5;
+      const vx = fromLeft ? (6 + Math.random() * 6) : -(6 + Math.random() * 6);
+      const vy = 2 + Math.random() * 3;
+      const mag = Math.sqrt(vx * vx + vy * vy);
       _shooters.push({
         x: fromLeft ? -20 : _w + 20,
         y: Math.random() * _h * 0.6,
-        vx: fromLeft ? (6 + Math.random() * 6) : -(6 + Math.random() * 6),
-        vy: 2 + Math.random() * 3,
+        vx, vy,
+        dirX: vx / mag,   // v2.2: cached unit direction
+        dirY: vy / mag,
         life: 1,
         decay: 0.012 + Math.random() * 0.01,
         len: 40 + Math.random() * 60,
@@ -209,9 +228,15 @@ function createFancyBG(opts = {}) {
       s.x += s.vx;
       s.y += s.vy;
       s.life -= s.decay;
-      if (s.life <= 0) { _shooters.splice(i, 1); continue; }
-      const tailX = s.x - (s.vx / Math.sqrt(s.vx * s.vx + s.vy * s.vy)) * s.len;
-      const tailY = s.y - (s.vy / Math.sqrt(s.vx * s.vx + s.vy * s.vy)) * s.len;
+      if (s.life <= 0) {
+        // v2.2: swap-and-pop instead of splice
+        _shooters[i] = _shooters[_shooters.length - 1];
+        _shooters.pop();
+        continue;
+      }
+      // v2.2: use cached inverse magnitude (set at spawn time)
+      const tailX = s.x - s.dirX * s.len;
+      const tailY = s.y - s.dirY * s.len;
       const grad = _ctx.createLinearGradient(tailX, tailY, s.x, s.y);
       grad.addColorStop(0, `hsla(${s.hue},90%,80%,0)`);
       grad.addColorStop(1, `hsla(${s.hue},90%,80%,${s.life * 0.8})`);

@@ -1,26 +1,35 @@
 'use strict';
 
 /**
- * Star Catcher v2 — Main Game Controller
+ * Star Catcher v2.2 — Main Game Controller
+ *
+ * v2.2 Performance overhaul:
+ *   - Single centralised game loop (one rAF drives all objects + particles)
+ *   - Object pool for falling objects (no DOM create/destroy per spawn)
+ *   - Particle pool for explosions (no DOM create/destroy per burst)
+ *   - JS-tracked positions: paddle & container cached, no getBoundingClientRect
+ *   - Difficulty cached per frame (avoids redundant Math.log calls)
  *
  * Sections:
  *   1. DOM refs
- *   2. Game state
+ *   2. Game state + layout cache
  *   3. Stars (background animation)
  *   3b. Game background wrappers
- *   4. Paddle
+ *   4. Paddle (JS-tracked)
  *   5. UI updates
- *   6. Explosions
- *   7. Falling objects
- *   8. Milestone / upgrades
- *   9. Pause
- *  10. Countdown
- *  11. Game over + leaderboard UI
- *  12. Game start / reset
- *  13. ???
- *  14. Settings
- *  15. Global listeners
- *  16. Title background
+ *   6. Object pool
+ *   7. Particle pool (explosions)
+ *   8. Central game loop
+ *   9. Spawn scheduling
+ *  10. Milestone / upgrades
+ *  11. Pause
+ *  12. Countdown
+ *  13. Game over + leaderboard UI
+ *  14. Game start / reset
+ *  15. ???
+ *  16. Settings
+ *  17. Global listeners
+ *  18. Title background
  */
 
 window.addEventListener('load', () => {
@@ -95,10 +104,20 @@ window.addEventListener('load', () => {
     settingsBtnGO:     document.getElementById('settings-btn-gameover'),
     settingsBackBtn:   document.getElementById('settings-back-btn'),
     fancyStarsToggle:  document.getElementById('fancy-stars-toggle'),
+    scorePopupsToggle: document.getElementById('score-popups-toggle'),
     musicVolumeSlider: document.getElementById('music-volume'),
     sfxVolumeSlider:   document.getElementById('sfx-volume'),
     musicVolVal:       document.getElementById('music-vol-val'),
     sfxVolVal:         document.getElementById('sfx-vol-val'),
+
+    // Tutorial
+    tutorialOverlay:    document.getElementById('tutorial-overlay'),
+    tutorialStepContainer: document.getElementById('tutorial-step-container'),
+    tutorialDots:       document.getElementById('tutorial-dots'),
+    tutorialNextBtn:    document.getElementById('tutorial-next-btn'),
+
+    // Precision float pool
+    precisionFloatPool: document.getElementById('precision-float-pool'),
   };
 
   const canvasCtx = DOM.canvas.getContext('2d');
@@ -141,10 +160,11 @@ window.addEventListener('load', () => {
   // ─── SETTINGS STATE ────────────────────────────────────────────────────────
 
   const settings = {
-    fancyStars:   true,
-    musicVolume:  0.8,    // 0–1
-    sfxVolume:    0.8,    // 0–1
-    openedFrom:   null,   // 'start' | 'pause' | 'gameover'
+    fancyStars:    true,
+    scorePopups:   true,
+    musicVolume:   0.8,
+    sfxVolume:     0.8,
+    openedFrom:    null,
   };
 
   // Gameplay fancy background (no title glow)
@@ -168,6 +188,29 @@ window.addEventListener('load', () => {
 
   // ─── 2. GAME STATE ──────────────────────────────────────────────────────────
 
+  /** Cached layout dimensions — updated on resize and game start. */
+  const layout = {
+    containerW:  0,
+    containerH:  0,
+    containerLeft: 0,
+    containerTop:  0,
+  };
+
+  /** Paddle position tracked in JS — no DOM reads needed during gameplay. */
+  const paddleState = {
+    x:     0,      // centre x relative to container
+    width: CONFIG.PADDLE.BASE_WIDTH,
+    height: CONFIG.PADDLE.HEIGHT,
+  };
+
+  function updateLayout() {
+    const rect = DOM.container.getBoundingClientRect();
+    layout.containerW    = rect.width;
+    layout.containerH    = rect.height;
+    layout.containerLeft = rect.left;
+    layout.containerTop  = rect.top;
+  }
+
   const state = {
     score:           0,
     lives:           0,
@@ -183,10 +226,14 @@ window.addEventListener('load', () => {
 
     lbOpenedFromGameOver: false,  // tracks which screen to return to from leaderboard
 
+    // v2.2: cached difficulty value, updated once per frame
+    cachedDifficulty: 0,
+
     // Timer handles for cleanup
     spawnTimer:      null,
     discoveryTimer:  null,
     starsRaf:        null,
+    gameLoopRaf:     null,   // v2.2: central game loop handle
   };
 
   // ─── 3. STARS ───────────────────────────────────────────────────────────────
@@ -252,14 +299,15 @@ window.addEventListener('load', () => {
     }
   }
 
-  // ─── 4. PADDLE ──────────────────────────────────────────────────────────────
+  // ─── 4. PADDLE (JS-tracked) ───────────────────────────────────────────────
 
   function setPaddleWidth(w) {
+    paddleState.width = w;
     DOM.paddle.style.width = w + 'px';
   }
 
   function impactEffect() {
-    const w = parseInt(DOM.paddle.style.width) || CONFIG.PADDLE.BASE_WIDTH;
+    const w = paddleState.width;
     DOM.paddle.style.height = '8px';
     DOM.paddle.style.width  = (w + 20) + 'px';
     setTimeout(() => {
@@ -270,10 +318,11 @@ window.addEventListener('load', () => {
 
   DOM.container.addEventListener('mousemove', e => {
     if (!state.active || state.paused) return;
-    const rect = DOM.container.getBoundingClientRect();
-    const x    = e.clientX - rect.left;
-    const half = (parseInt(DOM.paddle.style.width) || CONFIG.PADDLE.BASE_WIDTH) / 2;
-    DOM.paddleWrap.style.left = Math.max(half, Math.min(x, rect.width - half)) + 'px';
+    const x    = e.clientX - layout.containerLeft;
+    const half = paddleState.width / 2;
+    const clamped = Math.max(half, Math.min(x, layout.containerW - half));
+    paddleState.x = clamped;
+    DOM.paddleWrap.style.left = clamped + 'px';
   });
 
   // ─── 5. UI UPDATES ──────────────────────────────────────────────────────────
@@ -300,40 +349,210 @@ window.addEventListener('load', () => {
     }
   }
 
-  // ─── 6. EXPLOSIONS ──────────────────────────────────────────────────────────
 
-  function createExplosion(x, y, color) {
-    for (let i = 0; i < 15; i++) {
-      const p     = document.createElement('div');
-      p.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:4px;height:4px;background:${color};pointer-events:none;z-index:5;`;
-      DOM.container.appendChild(p);
+  // ─── 6. OBJECT POOL ──────────────────────────────────────────────────────
 
-      const angle = Math.random() * Math.PI * 2;
-      const vel   = 3 + Math.random() * 5;
-      let px = 0, py = 0, op = 1;
+  /**
+   * v2.2 — Pre-allocated pool of DOM elements for falling objects.
+   * Instead of createElement/remove on every spawn, we show/hide pooled divs.
+   */
+  const POOL_SIZE = 30;
+  const objectPool = [];          // { el, active, x, y, speed, size, isChroma, color }
+  const activeObjects = [];       // pool indices of currently-falling objects
 
-      function animParticle() {
-        if (!state.active) { p.remove(); return; }
-        if (state.paused)  { requestAnimationFrame(animParticle); return; }
-        px += Math.cos(angle) * vel;
-        py += Math.sin(angle) * vel;
-        op -= 0.03;
-        p.style.transform = `translate(${px}px,${py}px)`;
-        p.style.opacity   = op;
-        if (op > 0) requestAnimationFrame(animParticle); else p.remove();
-      }
-      requestAnimationFrame(animParticle);
+  function initObjectPool() {
+    objectPool.forEach(o => o.el.remove());
+    objectPool.length = 0;
+    activeObjects.length = 0;
+
+    for (let i = 0; i < POOL_SIZE; i++) {
+      const el = document.createElement('div');
+      el.style.cssText = 'position:absolute;display:none;z-index:5;';
+      DOM.container.appendChild(el);
+      objectPool.push({
+        el,
+        active: false,
+        x: 0, y: 0,
+        speed: 0,
+        size: 0,
+        isChroma: false,
+        color: '',
+      });
     }
   }
 
-  // ─── 7. FALLING OBJECTS ─────────────────────────────────────────────────────
+  /** Acquire a pooled object. Returns the object data or null if pool exhausted. */
+  function acquireObject() {
+    for (let i = 0; i < POOL_SIZE; i++) {
+      if (!objectPool[i].active) {
+        objectPool[i].active = true;
+        activeObjects.push(i);
+        return objectPool[i];
+      }
+    }
+    return null; // pool exhausted — skip this spawn
+  }
+
+  /** Release a pooled object back to inactive state (swap-and-pop). */
+  function releaseObject(poolIdx) {
+    const obj = objectPool[poolIdx];
+    obj.active = false;
+    obj.el.style.display = 'none';
+    obj.el.classList.remove('rainbow');
+    const aidx = activeObjects.indexOf(poolIdx);
+    if (aidx !== -1) {
+      activeObjects[aidx] = activeObjects[activeObjects.length - 1];
+      activeObjects.pop();
+    }
+  }
+
+  /** Release all active objects (used on game over / reset). */
+  function releaseAllObjects() {
+    for (let i = activeObjects.length - 1; i >= 0; i--) {
+      const obj = objectPool[activeObjects[i]];
+      obj.active = false;
+      obj.el.style.display = 'none';
+      obj.el.classList.remove('rainbow');
+    }
+    activeObjects.length = 0;
+  }
+
+  // ─── 7. PARTICLE POOL (explosions) ─────────────────────────────────────
 
   /**
-   * v2.1 — Logarithmic difficulty curve (0–1).
-   * Weighted blend of score-based and combo-based factors.
-   * Losing a combo streak causes a real (but partial) easing of difficulty.
+   * v2.2 — Pre-allocated pool of DOM elements for explosion particles.
+   * Each particle has its own velocity/opacity tracked in JS.
    */
-  function getDifficulty() {
+  const PARTICLE_POOL_SIZE = 120;   // supports ~8 simultaneous explosions (15 each)
+  const particlePool = [];
+  const activeParticles = [];
+
+  function initParticlePool() {
+    particlePool.forEach(p => p.el.remove());
+    particlePool.length = 0;
+    activeParticles.length = 0;
+
+    for (let i = 0; i < PARTICLE_POOL_SIZE; i++) {
+      const el = document.createElement('div');
+      el.style.cssText = 'position:absolute;width:4px;height:4px;pointer-events:none;z-index:5;display:none;';
+      DOM.container.appendChild(el);
+      particlePool.push({
+        el,
+        active: false,
+        ox: 0, oy: 0,
+        dx: 0, dy: 0,
+        vx: 0, vy: 0,
+        opacity: 0,
+      });
+    }
+  }
+
+  function createExplosion(x, y, color) {
+    for (let i = 0; i < 15; i++) {
+      let p = null, pIdx = -1;
+      for (let j = 0; j < PARTICLE_POOL_SIZE; j++) {
+        if (!particlePool[j].active) { p = particlePool[j]; pIdx = j; break; }
+      }
+      if (!p) break;  // pool exhausted
+
+      const angle = Math.random() * Math.PI * 2;
+      const vel   = 3 + Math.random() * 5;
+
+      p.active  = true;
+      p.ox      = x;
+      p.oy      = y;
+      p.dx      = 0;
+      p.dy      = 0;
+      p.vx      = Math.cos(angle) * vel;
+      p.vy      = Math.sin(angle) * vel;
+      p.opacity = 1;
+
+      p.el.style.background = color;
+      p.el.style.left    = x + 'px';
+      p.el.style.top     = y + 'px';
+      p.el.style.opacity = '1';
+      p.el.style.transform = '';
+      p.el.style.display = 'block';
+
+      activeParticles.push(pIdx);
+    }
+  }
+
+  /** Tick all active particles. Called from central game loop. */
+  function updateParticles() {
+    for (let i = activeParticles.length - 1; i >= 0; i--) {
+      const p = particlePool[activeParticles[i]];
+      p.dx += p.vx;
+      p.dy += p.vy;
+      p.opacity -= 0.03;
+
+      if (p.opacity <= 0) {
+        p.active = false;
+        p.el.style.display = 'none';
+        activeParticles[i] = activeParticles[activeParticles.length - 1];
+        activeParticles.pop();
+      } else {
+        p.el.style.transform = `translate(${p.dx}px,${p.dy}px)`;
+        p.el.style.opacity   = p.opacity;
+      }
+    }
+  }
+
+  /** Release all particles (game over / reset). */
+  function releaseAllParticles() {
+    for (let i = activeParticles.length - 1; i >= 0; i--) {
+      const p = particlePool[activeParticles[i]];
+      p.active = false;
+      p.el.style.display = 'none';
+    }
+    activeParticles.length = 0;
+  }
+
+  // ─── 7b. PRECISION FLOAT TEXT ─────────────────────────────────────────
+
+  /**
+   * v2.2 — Shows a floating "+N" text near the catch point, color-coded
+   * by how close to center the catch was (precision 0–1).
+   */
+  function showPrecisionFloat(x, y, points, precision) {
+    const el = document.createElement('div');
+    el.className = 'precision-float';
+
+    // Tier classification
+    let tier, label;
+    if (precision >= 0.9)      { tier = 'tier-perfect'; label = 'PERFECT'; }
+    else if (precision >= 0.6) { tier = 'tier-great';   label = 'GREAT'; }
+    else if (precision >= 0.3) { tier = 'tier-good';    label = ''; }
+    else                       { tier = 'tier-ok';      label = ''; }
+
+    el.classList.add(tier);
+    el.textContent = '+' + points + (label ? ' ' + label : '');
+    el.style.left = x + 'px';
+    el.style.top  = y + 'px';
+    el.style.setProperty('--float-dur', CONFIG.PRECISION.FLOAT_DURATION_MS + 'ms');
+    el.style.setProperty('--float-rise', CONFIG.PRECISION.FLOAT_RISE_PX + 'px');
+
+    DOM.precisionFloatPool.appendChild(el);
+
+    // Self-cleanup after animation
+    setTimeout(() => el.remove(), CONFIG.PRECISION.FLOAT_DURATION_MS + 50);
+  }
+
+  // ─── 8. CENTRAL GAME LOOP ──────────────────────────────────────────────
+
+  /**
+   * v2.2 — Single requestAnimationFrame drives ALL gameplay:
+   *   - Updates cached difficulty once per frame
+   *   - Moves all falling objects via JS positions
+   *   - Checks collisions using JS-tracked paddle rect (zero reflows)
+   *   - Ticks explosion particles
+   *
+   * The background (canvas stars / fancy BG) still runs its own rAF
+   * since it operates on a separate <canvas> and doesn't touch game DOM.
+   */
+
+  /** v2.2 — Logarithmic difficulty curve, computed once per frame. */
+  function computeDifficulty() {
     const D = CONFIG.DIFFICULTY;
     const scoreFactor = Math.min(1,
       Math.log(1 + state.score / D.SCORE_SCALE) /
@@ -346,60 +565,84 @@ window.addEventListener('load', () => {
     return Math.min(1, D.SCORE_WEIGHT * scoreFactor + D.COMBO_WEIGHT * comboFactor);
   }
 
-  function spawnObject() {
-    if (!state.active || state.paused || state.countingDown) return;
+  /** Paddle bounding box computed from JS state — zero layout queries. */
+  function getPaddleRect() {
+    const half = paddleState.width / 2;
+    return {
+      left:   paddleState.x - half,
+      right:  paddleState.x + half,
+      top:    layout.containerH - CONFIG.PADDLE.BOTTOM_OFFSET - paddleState.height,
+      bottom: layout.containerH - CONFIG.PADDLE.BOTTOM_OFFSET,
+    };
+  }
 
-    const isGold  = Math.random() < CONFIG.OBJECTS.GOLD_CHANCE;
-    const size    = isGold ? CONFIG.OBJECTS.GOLD_SIZE : CONFIG.OBJECTS.STAR_SIZE;
-    const x       = Math.random() * (DOM.container.offsetWidth - size);
-    const color   = isGold ? 'transparent' : `hsl(${Math.random() * 360},80%,60%)`;
-    const diff    = getDifficulty();
-    const speed   = CONFIG.OBJECTS.BASE_SPEED + CONFIG.DIFFICULTY.SPEED_EXTRA * diff;
-
-    const obj = document.createElement('div');
-    obj.style.cssText = `position:absolute;top:-50px;left:${x}px;width:${size}px;height:${size}px;` +
-      `background:${color};box-shadow:0 0 10px ${color};z-index:5;`;
-    if (isGold) {
-      obj.classList.add('rainbow');
-      obj.style.clipPath = 'polygon(50% 0%,100% 50%,50% 100%,0% 50%)';
+  function gameLoop() {
+    if (!state.active) return;
+    if (state.paused) {
+      state.gameLoopRaf = requestAnimationFrame(gameLoop);
+      return;
     }
-    DOM.container.appendChild(obj);
 
-    let top = -50;
+    // ── Per-frame caches ──
+    state.cachedDifficulty = computeDifficulty();
+    const pRect      = getPaddleRect();
+    const containerH = layout.containerH;
 
-    function fall() {
-      if (!state.active) { obj.remove(); return; }
-      if (state.paused)  { requestAnimationFrame(fall); return; }
+    // ── Update falling objects ──
+    let gameOverTriggered = false;
+    for (let i = activeObjects.length - 1; i >= 0; i--) {
+      const poolIdx = activeObjects[i];
+      const obj = objectPool[poolIdx];
 
-      top += speed;
-      obj.style.top = top + 'px';
+      obj.y += obj.speed;
+      obj.el.style.top = obj.y + 'px';
 
-      // Collision with paddle
-      const pRect = DOM.paddleWrap.getBoundingClientRect();
-      const oRect = obj.getBoundingClientRect();
-      const hit   = oRect.bottom >= pRect.top  && oRect.top    <= pRect.bottom &&
-                    oRect.left   <= pRect.right && oRect.right  >= pRect.left;
+      // Collision: AABB from JS-tracked positions (zero reflows)
+      const oBottom = obj.y + obj.size;
+      const oRight  = obj.x + obj.size;
+
+      const hit = oBottom >= pRect.top  && obj.y   <= pRect.bottom &&
+                  obj.x   <= pRect.right && oRight >= pRect.left;
 
       if (hit) {
         state.combo++;
         if (state.combo > state.sessionMaxCombo) state.sessionMaxCombo = state.combo;
-        state.score += (isGold ? CONFIG.OBJECTS.GOLD_SCORE : CONFIG.OBJECTS.STAR_SCORE) * state.combo;
+
+        // v2.2 — Precision scoring: how close to paddle center?
+        const objCenterX   = obj.x + obj.size / 2;
+        const paddleCenterX = paddleState.x;
+        const halfW        = paddleState.width / 2;
+        const distFromCenter = Math.abs(objCenterX - paddleCenterX);
+        const precision    = 1 - Math.min(1, distFromCenter / halfW);   // 0 = edge, 1 = dead center
+        const P = CONFIG.PRECISION;
+        const precisionMult = P.EDGE_MULT + (P.CENTER_MULT - P.EDGE_MULT) * precision;
+
+        const basePoints = (obj.isChroma ? CONFIG.OBJECTS.CHROMA_SCORE : CONFIG.OBJECTS.STAR_SCORE) * state.combo;
+        const finalPoints = Math.round(basePoints * precisionMult);
+        state.score += finalPoints;
         updateScore();
         updateCombo();
-        if (isGold) triggerMilestone();
+
+        // Show floating precision score
+        if (settings.scorePopups) {
+          showPrecisionFloat(objCenterX, obj.y, finalPoints, precision);
+        }
+
         AudioManager.play(
-          (isGold ? CONFIG.AUDIO.GOLD_BASE_HZ : CONFIG.AUDIO.CATCH_BASE_HZ) + state.combo * 20,
+          (obj.isChroma ? CONFIG.AUDIO.CHROMA_BASE_HZ : CONFIG.AUDIO.CATCH_BASE_HZ) + state.combo * 20,
           'square', 0.1
         );
-        createExplosion(oRect.left, oRect.top, isGold ? '#fff' : color);
+        createExplosion(obj.x, obj.y, obj.isChroma ? '#fff' : obj.color);
         impactEffect();
-        obj.remove();
-        return;
+        const wasChroma = obj.isChroma;
+        releaseObject(poolIdx);
+        if (wasChroma) triggerMilestone();
+        continue;
       }
 
       // Fell off bottom
-      if (top > DOM.container.offsetHeight) {
-        if (!isGold) {
+      if (obj.y > containerH) {
+        if (!obj.isChroma) {
           state.lives--;
           state.combo = 0;
           updateLives();
@@ -407,29 +650,82 @@ window.addEventListener('load', () => {
           AudioManager.play(CONFIG.AUDIO.MISS_HZ, 'sawtooth', 0.3, 0.2);
           DOM.container.classList.add('shake');
           setTimeout(() => DOM.container.classList.remove('shake'), 300);
-          if (state.lives <= 0) { triggerGameOver(); obj.remove(); return; }
+          if (state.lives <= 0) gameOverTriggered = true;
         } else {
           state.combo = 0;
           updateCombo();
         }
-        obj.remove();
-        return;
+        releaseObject(poolIdx);
+        continue;
       }
-
-      requestAnimationFrame(fall);
     }
 
-    requestAnimationFrame(fall);
+    // ── Update particles ──
+    updateParticles();
+
+    // ── Handle game over after loop (avoids mutation during iteration) ──
+    if (gameOverTriggered) {
+      triggerGameOver();
+      return;
+    }
+
+    state.gameLoopRaf = requestAnimationFrame(gameLoop);
+  }
+
+  function startGameLoop() {
+    if (state.gameLoopRaf) cancelAnimationFrame(state.gameLoopRaf);
+    state.gameLoopRaf = requestAnimationFrame(gameLoop);
+  }
+
+  function stopGameLoop() {
+    if (state.gameLoopRaf) {
+      cancelAnimationFrame(state.gameLoopRaf);
+      state.gameLoopRaf = null;
+    }
+  }
+
+  // ─── 9. SPAWN SCHEDULING ───────────────────────────────────────────────
+
+  function spawnObject() {
+    if (!state.active || state.paused || state.countingDown) return;
+
+    const obj = acquireObject();
+    if (!obj) return;   // pool exhausted, skip this spawn
+
+    const isChroma = Math.random() < CONFIG.OBJECTS.CHROMA_CHANCE;
+    const size   = isChroma ? CONFIG.OBJECTS.CHROMA_SIZE : CONFIG.OBJECTS.STAR_SIZE;
+    const x      = Math.random() * (layout.containerW - size);
+    const color  = isChroma ? 'transparent' : `hsl(${Math.random() * 360},80%,60%)`;
+    const diff   = state.cachedDifficulty;
+    const speed  = CONFIG.OBJECTS.BASE_SPEED + CONFIG.DIFFICULTY.SPEED_EXTRA * diff;
+
+    obj.x      = x;
+    obj.y      = -50;
+    obj.speed  = speed;
+    obj.size   = size;
+    obj.isChroma = isChroma;
+    obj.color  = color;
+
+    const el = obj.el;
+    el.style.left       = x + 'px';
+    el.style.top        = '-50px';
+    el.style.width      = size + 'px';
+    el.style.height     = size + 'px';
+    el.style.background = color;
+    el.style.boxShadow  = '0 0 10px ' + color;
+    el.style.clipPath   = isChroma ? 'polygon(50% 0%,100% 50%,50% 100%,0% 50%)' : '';
+    el.style.display    = 'block';
+
+    if (isChroma) el.classList.add('rainbow');
   }
 
   /**
-   * v2.1 — Spawn scheduling now uses logarithmic difficulty curve.
-   * interval lerps linearly from BASE_SPAWN_MS (easy) → MIN_SPAWN_MS (hard).
+   * v2.2 — Spawn scheduling uses cached difficulty for interval calc.
    */
   function scheduleSpawn() {
     if (!state.active || state.paused || state.countingDown) return;
     spawnObject();
-    const diff     = getDifficulty();
+    const diff     = state.cachedDifficulty;
     const range    = CONFIG.GAME.BASE_SPAWN_MS - CONFIG.GAME.MIN_SPAWN_MS;
     const interval = CONFIG.GAME.MIN_SPAWN_MS + range * (1 - diff);
     state.spawnTimer = setTimeout(scheduleSpawn, interval);
@@ -440,7 +736,7 @@ window.addEventListener('load', () => {
     state.spawnTimer = null;
   }
 
-  // ─── 8. MILESTONE / UPGRADES ────────────────────────────────────────────────
+  // ─── 10. MILESTONE / UPGRADES ────────────────────────────────────────────────
 
   function triggerMilestone() {
     AudioManager.play(CONFIG.AUDIO.MILESTONE_HZ, 'square', 0.5, 0.15);
@@ -463,7 +759,7 @@ window.addEventListener('load', () => {
     startCountdown();
   });
 
-  // ─── 9. PAUSE ───────────────────────────────────────────────────────────────
+  // ─── 11. PAUSE ───────────────────────────────────────────────────────────────
 
   /**
    * @param {boolean} showMenu - show the pause overlay (false during milestone)
@@ -496,7 +792,7 @@ window.addEventListener('load', () => {
 
   DOM.resumeBtn.addEventListener('click', () => resumeGame());
 
-  // ─── 10. COUNTDOWN ──────────────────────────────────────────────────────────
+  // ─── 12. COUNTDOWN ──────────────────────────────────────────────────────────
 
   function startCountdown() {
     DOM.milestoneMenu.style.display = 'none';
@@ -538,11 +834,15 @@ window.addEventListener('load', () => {
     tick();
   }
 
-  // ─── 11. GAME OVER + LEADERBOARD UI ─────────────────────────────────────────
+  // ─── 13. GAME OVER + LEADERBOARD UI ─────────────────────────────────────────
 
   async function triggerGameOver() {
     state.active = false;
     stopSpawning();
+    stopGameLoop();
+    releaseAllObjects();
+    releaseAllParticles();
+    DOM.precisionFloatPool.innerHTML = '';
     stopGameBG();
     stopMusic();
     AudioManager.play(CONFIG.AUDIO.GAME_OVER_HZ, 'sine', 1.0, 0.3);
@@ -650,9 +950,150 @@ window.addEventListener('load', () => {
     }
   });
 
-  // ─── 12. GAME START / RESET ─────────────────────────────────────────────────
+  // ─── 14. GAME START / RESET ─────────────────────────────────────────────────
+
+  // ─── 14a. TUTORIAL SYSTEM ─────────────────────────────────────────────────
+
+  const TUTORIAL_KEY = 'starcatcher_tutorial_done';
+
+  function isFirstTimePlaying() {
+    try { return !localStorage.getItem(TUTORIAL_KEY); }
+    catch (e) { return false; }
+  }
+
+  function markTutorialDone() {
+    try { localStorage.setItem(TUTORIAL_KEY, '1'); }
+    catch (e) { /* silently fail */ }
+  }
+
+  const TUTORIAL_STEPS = [
+    {
+      title: 'WELCOME, PILOT',
+      titleColor: 'var(--cyan)',
+      body: `<p>Your mission: catch falling stars with your paddle before they slip past.</p>
+             <p>Move your <span style="color:var(--cyan);">mouse</span> to control the paddle.</p>`,
+    },
+    {
+      title: 'PRECISION MATTERS',
+      titleColor: 'var(--magenta)',
+      body: `<p>Catching stars near the <span style="color:var(--magenta);font-weight:bold;">center</span> of your paddle scores up to <span style="color:var(--magenta);font-weight:bold;">2x points</span>.</p>
+             <p>The edges score 1x. Aim for the glow!</p>
+             <div class="tutorial-visual">
+               <div class="tutorial-paddle-demo"></div>
+               <div class="tutorial-paddle-labels">
+                 <span class="edge-label">1x</span>
+                 <span class="center-label">★ 2x ★</span>
+                 <span class="edge-label">1x</span>
+               </div>
+             </div>`,
+    },
+    {
+      title: 'COMBO STREAK',
+      titleColor: 'var(--gold)',
+      body: `<p>Each consecutive catch builds your <span style="color:var(--gold);font-weight:bold;">combo multiplier</span>.</p>
+             <p>Miss a star and you lose a <span style="color:var(--red);">❤ life</span> and your combo resets.</p>
+             <p style="margin-top:12px;color:rgba(255,255,255,0.5);font-size:13px;">Combine high combos with center catches for massive scores!</p>`,
+    },
+    {
+      title: 'CHROMA',
+      titleColor: '#ffcc00',
+      body: `<p>Rare <span style="color:#ffcc00;font-weight:bold;">Chroma</span> gems appear occasionally — shimmering rainbow diamonds.</p>
+             <p>Catch one to trigger a <span style="color:var(--magenta);font-weight:bold;">LEVEL UP</span> — choose between an expanded paddle or an extra life.</p>
+             <p style="margin-top:12px;color:rgba(255,255,255,0.5);font-size:13px;">Missing a Chroma won't cost a life, but it resets your combo.</p>`,
+    },
+    {
+      title: 'READY FOR LAUNCH',
+      titleColor: 'var(--cyan)',
+      body: `<p>Press <span style="color:var(--cyan);font-weight:bold;">SPACE</span> to pause at any time.</p>
+             <p style="margin-top:14px;font-size:18px;color:var(--cyan);letter-spacing:3px;">Good luck out there, pilot!</p>`,
+    },
+  ];
+
+  let _tutorialStep = 0;
+
+  function buildTutorialDOM() {
+    DOM.tutorialStepContainer.innerHTML = '';
+    DOM.tutorialDots.innerHTML = '';
+
+    TUTORIAL_STEPS.forEach((step, i) => {
+      // Step content
+      const div = document.createElement('div');
+      div.className = 'tutorial-step' + (i === 0 ? ' active' : '');
+      div.innerHTML = `<h3 style="color:${step.titleColor}">${step.title}</h3>${step.body}`;
+      DOM.tutorialStepContainer.appendChild(div);
+
+      // Dot
+      const dot = document.createElement('span');
+      dot.className = 'tutorial-dot' + (i === 0 ? ' active' : '');
+      DOM.tutorialDots.appendChild(dot);
+    });
+  }
+
+  function showTutorial(onComplete) {
+    _tutorialStep = 0;
+    buildTutorialDOM();
+    DOM.tutorialOverlay.style.display = 'flex';
+
+    const steps = DOM.tutorialStepContainer.querySelectorAll('.tutorial-step');
+    const dots  = DOM.tutorialDots.querySelectorAll('.tutorial-dot');
+
+    function goToStep(idx) {
+      steps.forEach((s, i) => s.classList.toggle('active', i === idx));
+      dots.forEach((d, i)  => d.classList.toggle('active', i === idx));
+      DOM.tutorialNextBtn.textContent = idx === TUTORIAL_STEPS.length - 1 ? 'LAUNCH! 🚀' : 'NEXT →';
+    }
+
+    // Remove old listener if any
+    const nextBtn = DOM.tutorialNextBtn;
+    const newBtn  = nextBtn.cloneNode(true);
+    nextBtn.parentNode.replaceChild(newBtn, nextBtn);
+    DOM.tutorialNextBtn = newBtn;
+
+    newBtn.addEventListener('click', () => {
+      AudioManager.play(660, 'sine', 0.08, 0.1);
+      _tutorialStep++;
+      if (_tutorialStep >= TUTORIAL_STEPS.length) {
+        DOM.tutorialOverlay.style.display = 'none';
+        markTutorialDone();
+        if (onComplete) onComplete();
+      } else {
+        goToStep(_tutorialStep);
+      }
+    });
+
+    goToStep(0);
+  }
+
+  // ─── 14b. GAME START LOGIC ────────────────────────────────────────────────
 
   function startGame() {
+    AudioManager.resume();
+
+    // First-time tutorial check — show tutorial before launching
+    if (isFirstTimePlaying()) {
+      TitleBG.stop();
+      stopTitleMusic();
+      stopLbMusic();
+      DOM.startScreen.style.display    = 'none';
+      DOM.lbScreen.style.display       = 'none';
+      DOM.settingsScreen.style.display = 'none';
+      DOM.container.style.display      = 'block';
+
+      // Prep the game visually so tutorial has context
+      updateLayout();
+      startGameBG();
+
+      showTutorial(() => {
+        // After tutorial completes, actually start the game
+        _launchGame();
+      });
+      return;
+    }
+
+    _launchGame();
+  }
+
+  function _launchGame() {
     AudioManager.resume();
     TitleBG.stop();
     stopTitleMusic();
@@ -667,6 +1108,7 @@ window.addEventListener('load', () => {
     DOM.countdown.style.display      = 'none';
     DOM.nameEntry.style.display      = 'none';
     DOM.viewLbBtn.style.display      = 'none';
+    DOM.tutorialOverlay.style.display = 'none';
     DOM.container.style.display      = 'block';
 
     // Reset timers
@@ -695,7 +1137,16 @@ window.addEventListener('load', () => {
     updateScore();
     updateLives();
 
+    // v2.2: initialise pools + layout cache
+    updateLayout();
+    paddleState.x = layout.containerW / 2;
+    paddleState.width = CONFIG.PADDLE.BASE_WIDTH;
+    initObjectPool();
+    initParticlePool();
+    DOM.precisionFloatPool.innerHTML = '';  // clear any lingering float text
+
     startGameBG();
+    startGameLoop();
     scheduleSpawn();
     startMusic();
   }
@@ -703,7 +1154,7 @@ window.addEventListener('load', () => {
   DOM.startGameBtn.addEventListener('click', startGame);
   DOM.rebootBtn.addEventListener('click',    startGame);
 
-  // ─── 13. ??? ─────────────────────────────────────────────────────────
+  // ─── 15. ??? ─────────────────────────────────────────────────────────
 
   let _eeStep = 0, _eeTimer = null;
   const EE_SEQ = CONFIG.E_E.SEQUENCE;
@@ -857,13 +1308,14 @@ window.addEventListener('load', () => {
     };
   }
 
-  // ─── 14. SETTINGS ───────────────────────────────────────────────────────────
+  // ─── 16. SETTINGS ───────────────────────────────────────────────────────────
 
   function openSettings(from) {
     settings.openedFrom = from;
 
     // Sync UI controls with current settings
     DOM.fancyStarsToggle.checked  = settings.fancyStars;
+    DOM.scorePopupsToggle.checked = settings.scorePopups;
     DOM.musicVolumeSlider.value   = Math.round(settings.musicVolume * 100);
     DOM.sfxVolumeSlider.value     = Math.round(settings.sfxVolume * 100);
     DOM.musicVolVal.textContent   = Math.round(settings.musicVolume * 100) + '%';
@@ -917,6 +1369,12 @@ window.addEventListener('load', () => {
     }
   });
 
+  // ── Score Popups toggle ─────────────────────────────────────────────────────
+
+  DOM.scorePopupsToggle.addEventListener('change', () => {
+    settings.scorePopups = DOM.scorePopupsToggle.checked;
+  });
+
   // ── Volume sliders ──────────────────────────────────────────────────────────
 
   /** Play a short preview tone at the given volume (bypasses AudioManager master). */
@@ -953,7 +1411,7 @@ window.addEventListener('load', () => {
     AudioManager.play(660, 'sine', 0.08, 0.12);
   });
 
-  // ─── 15. GLOBAL LISTENERS ───────────────────────────────────────────────────
+  // ─── 17. GLOBAL LISTENERS ───────────────────────────────────────────────────
 
   // Unlock AudioContext + start title music on first user interaction
   document.addEventListener('click', () => {
@@ -966,11 +1424,14 @@ window.addEventListener('load', () => {
 
   // Re-initialise star canvas on resize
   window.addEventListener('resize', () => {
-    if (state.active) resizeGameBG();
+    if (state.active) {
+      updateLayout();
+      resizeGameBG();
+    }
     TitleBG.resize();
   });
 
-  // ─── 16. TITLE BACKGROUND ──────────────────────────────────────────────────
+  // ─── 18. TITLE BACKGROUND ──────────────────────────────────────────────────
 
   TitleBG.init(DOM.titleCanvas);
   if (settings.fancyStars) {

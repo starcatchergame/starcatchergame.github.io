@@ -23,10 +23,10 @@ const CONFIG = Object.freeze({
   },
 
   OBJECTS: {
-    GOLD_CHANCE:       0.03,
-    GOLD_SIZE:         40,
+    CHROMA_CHANCE:       0.03,
+    CHROMA_SIZE:         40,
     STAR_SIZE:         16,
-    GOLD_SCORE:        50,
+    CHROMA_SCORE:        50,
     STAR_SCORE:        10,
     BASE_SPEED:        2.5,
   },
@@ -52,12 +52,22 @@ const CONFIG = Object.freeze({
 
   AUDIO: {
     CATCH_BASE_HZ:     440,
-    GOLD_BASE_HZ:      880,
+    CHROMA_BASE_HZ:      880,
     MILESTONE_HZ:      523,
     MISS_HZ:           150,
     GAME_OVER_HZ:      80,
     COUNTDOWN_HZ:      [200, 300, 400],   // count 3, 2, 1
     GO_HZ:             880,
+  },
+
+  // v2.2 — Precision scoring: center catches are worth more
+  PRECISION: {
+    // Multiplier range: edge of paddle → center of paddle
+    EDGE_MULT:         1.0,
+    CENTER_MULT:       2.0,
+    // Floating score text rise distance & duration
+    FLOAT_RISE_PX:     60,
+    FLOAT_DURATION_MS: 800,
   },
 
   LEADERBOARD: {
