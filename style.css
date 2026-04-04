@@ -18,6 +18,27 @@
 *, *::before, *::after { box-sizing: border-box; }
 body { margin: 0; background: #111; }
 
+/* ── Star Cursor ──────────────────────────────────────────────────────────── */
+#star-cursor-canvas {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  z-index: 99999;
+  display: none;
+}
+
+body.star-cursor-active,
+body.star-cursor-active #start-screen,
+body.star-cursor-active #leaderboard-screen,
+body.star-cursor-active #settings-screen,
+body.star-cursor-active .game-button,
+body.star-cursor-active .lb-tab,
+body.star-cursor-active input,
+body.star-cursor-active a {
+  cursor: none !important;
+}
+
 /* ── Shared screen shell ──────────────────────────────────────────────────── */
 #start-screen,
 #leaderboard-screen,
@@ -69,6 +90,13 @@ body { margin: 0; background: #111; }
   opacity: 0.8;
   z-index: 2;
   position: relative;
+  --grav-x: 0px;
+  --grav-y: 0px;
+  --grav-rot: 0deg;
+  --grav-scale: 1;
+  translate: var(--grav-x) var(--grav-y);
+  rotate: var(--grav-rot);
+  scale: var(--grav-scale);
 }
 
 .start-actions {
@@ -78,6 +106,13 @@ body { margin: 0; background: #111; }
   justify-content: center;
   z-index: 2;
   position: relative;
+  --grav-x: 0px;
+  --grav-y: 0px;
+  --grav-rot: 0deg;
+  --grav-scale: 1;
+  translate: var(--grav-x) var(--grav-y);
+  rotate: var(--grav-rot);
+  scale: var(--grav-scale);
 }
 
 /* ── Leaderboard Screen ───────────────────────────────────────────────────── */
@@ -95,6 +130,13 @@ body { margin: 0; background: #111; }
   letter-spacing: 6px;
   text-shadow: 0 0 20px var(--cyan);
   margin: 0 0 24px;
+  --grav-x: 0px;
+  --grav-y: 0px;
+  --grav-rot: 0deg;
+  --grav-scale: 1;
+  translate: var(--grav-x) var(--grav-y);
+  rotate: var(--grav-rot);
+  scale: var(--grav-scale);
 }
 
 /* Tabs */
@@ -195,6 +237,13 @@ body { margin: 0; background: #111; }
   text-shadow: 0 0 20px var(--cyan);
   color: var(--cyan);
   margin: 0 0 30px;
+  --grav-x: 0px;
+  --grav-y: 0px;
+  --grav-rot: 0deg;
+  --grav-scale: 1;
+  translate: var(--grav-x) var(--grav-y);
+  rotate: var(--grav-rot);
+  scale: var(--grav-scale);
 }
 
 .settings-section {
@@ -441,6 +490,13 @@ body { margin: 0; background: #111; }
   letter-spacing: 10px;
   text-shadow: 0 0 20px var(--cyan);
   color: var(--cyan);
+  --grav-x: 0px;
+  --grav-y: 0px;
+  --grav-rot: 0deg;
+  --grav-scale: 1;
+  translate: var(--grav-x) var(--grav-y);
+  rotate: var(--grav-rot);
+  scale: var(--grav-scale);
 }
 
 .score-summary p {
@@ -730,7 +786,16 @@ body { margin: 0; background: #111; }
 #floating-title span {
   display: inline-block;
   animation: drift 12s ease-in-out infinite alternate;
-  transition: transform 0.3s ease-out, color 0.5s ease-out;
+  transition: color 0.5s ease-out;
+  /* Gravity field offsets — set by StarCursor, layered on top of drift animation */
+  --grav-x: 0px;
+  --grav-y: 0px;
+  --grav-rot: 0deg;
+  --grav-scale: 1;
+  translate: var(--grav-x) var(--grav-y);
+  rotate: var(--grav-rot);
+  scale: var(--grav-scale);
+  will-change: translate, rotate, scale;
 }
 
 @keyframes drift {
@@ -766,3 +831,226 @@ body { margin: 0; background: #111; }
 }
 
 .rainbow { animation: rainbow-glow 1s linear infinite; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Ratchet Cars — Easter Egg Styles (rc- prefixed to avoid collisions)
+   ══════════════════════════════════════════════════════════════════════════ */
+
+#ratchet-cars-mount {
+  display: none;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  min-height: 700px;
+  background: #0a0a12;
+}
+
+#rc-wrapper {
+  position: relative;
+  width: 420px;
+  height: 700px;
+  border: 3px solid #ff00ff;
+  box-shadow:
+    0 0 30px rgba(255,0,255,0.4),
+    0 0 60px rgba(255,0,255,0.15),
+    inset 0 0 30px rgba(255,0,255,0.08);
+  overflow: hidden;
+  cursor: none;
+  font-family: "Courier New", Courier, monospace;
+}
+
+#rc-wrapper canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ── Scanlines ──────────────────────────────────────────────────────────── */
+#rc-scanlines {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.06) 2px,
+    rgba(0,0,0,0.06) 4px
+  );
+  pointer-events: none;
+  z-index: 90;
+}
+
+/* ── HUD ────────────────────────────────────────────────────────────────── */
+#rc-hud {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  padding: 12px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  z-index: 50;
+  pointer-events: none;
+  font-family: "Courier New", Courier, monospace;
+}
+
+.rc-hud-score {
+  font-size: 22px;
+  font-weight: 900;
+  color: var(--cyan);
+  text-shadow: 0 0 15px var(--cyan);
+  letter-spacing: 2px;
+}
+
+.rc-hud-speed {
+  font-size: 13px;
+  font-weight: 700;
+  color: #ff6600;
+  text-shadow: 0 0 10px #ff6600;
+  letter-spacing: 1px;
+  text-align: right;
+}
+
+.rc-hud-mult {
+  font-size: 11px;
+  color: var(--gold);
+  text-shadow: 0 0 8px var(--gold);
+  margin-top: 4px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.rc-hud-mult.rc-visible { opacity: 1; }
+
+/* ── Overlay screens ────────────────────────────────────────────────────── */
+.rc-screen-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 100;
+  transition: opacity 0.4s ease;
+}
+
+.rc-screen-overlay.rc-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+#rc-menu-screen {
+  background: rgba(5,5,15,0.92);
+}
+
+.rc-title {
+  font-family: "Courier New", Courier, monospace;
+  font-size: 42px;
+  font-weight: 900;
+  color: #ff00ff;
+  text-shadow:
+    0 0 20px #ff00ff,
+    0 0 60px rgba(255,0,255,0.5);
+  letter-spacing: 8px;
+  margin: 0 0 6px;
+  text-align: center;
+  line-height: 1.15;
+}
+
+.rc-subtitle {
+  font-size: 11px;
+  color: rgba(255,0,255,0.5);
+  letter-spacing: 6px;
+  margin-bottom: 40px;
+  text-transform: uppercase;
+}
+
+.rc-btn {
+  background: transparent;
+  border: 2px solid #ff00ff;
+  color: #ff00ff;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  padding: 14px 36px;
+  cursor: pointer;
+  text-transform: uppercase;
+  transition: all 0.2s;
+  margin-bottom: 12px;
+  min-width: 240px;
+}
+
+.rc-btn:hover {
+  background: rgba(255,0,255,0.15);
+  box-shadow: 0 0 25px rgba(255,0,255,0.5);
+  transform: scale(1.03);
+}
+
+.rc-btn.rc-secondary {
+  border-color: rgba(255,0,255,0.3);
+  color: rgba(255,0,255,0.5);
+  font-size: 12px;
+  padding: 10px 24px;
+}
+
+.rc-controls-hint {
+  margin-top: 30px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.3);
+  letter-spacing: 2px;
+  text-align: center;
+  line-height: 1.8;
+}
+
+.rc-controls-hint kbd {
+  display: inline-block;
+  border: 1px solid rgba(255,255,255,0.2);
+  padding: 2px 8px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.05);
+  font-family: "Courier New", Courier, monospace;
+  color: rgba(255,255,255,0.5);
+}
+
+/* ── Game Over ──────────────────────────────────────────────────────────── */
+#rc-gameover-screen {
+  background: rgba(5,2,10,0.94);
+}
+
+.rc-crash-text {
+  font-family: "Courier New", Courier, monospace;
+  font-size: 48px;
+  font-weight: 900;
+  color: #ff2244;
+  text-shadow:
+    0 0 20px #ff2244,
+    0 0 80px rgba(255,34,68,0.6);
+  letter-spacing: 10px;
+  margin-bottom: 8px;
+  animation: rc-crash-pulse 0.6s ease-out;
+}
+
+@keyframes rc-crash-pulse {
+  0%   { transform: scale(2); opacity: 0; }
+  50%  { transform: scale(0.95); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.rc-stat-line {
+  font-family: "Courier New", Courier, monospace;
+  font-size: 16px;
+  margin: 6px 0;
+  letter-spacing: 2px;
+  color: #fff;
+}
+
+.rc-stat-line.rc-score-line { color: var(--cyan); font-size: 22px; }
+.rc-stat-line.rc-best-line  { color: var(--gold); font-size: 14px; }
+.rc-stat-line.rc-speed-line { color: #ff6600; font-size: 13px; }
+
+.rc-go-actions {
+  margin-top: 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}

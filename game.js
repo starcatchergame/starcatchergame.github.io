@@ -863,6 +863,7 @@ window.addEventListener('load', () => {
 
     DOM.viewLbBtn.style.display = 'inline-block';
     DOM.gameOver.style.display  = 'block';
+    StarCursor.enable();
   }
 
   DOM.submitScoreBtn.addEventListener('click', () => {
@@ -1074,6 +1075,7 @@ window.addEventListener('load', () => {
       TitleBG.stop();
       stopTitleMusic();
       stopLbMusic();
+      StarCursor.disable();
       DOM.startScreen.style.display    = 'none';
       DOM.lbScreen.style.display       = 'none';
       DOM.settingsScreen.style.display = 'none';
@@ -1098,6 +1100,7 @@ window.addEventListener('load', () => {
     TitleBG.stop();
     stopTitleMusic();
     stopLbMusic();
+    StarCursor.disable();
 
     // Hide all screens / overlays
     DOM.startScreen.style.display    = 'none';
@@ -1188,20 +1191,7 @@ window.addEventListener('load', () => {
       _eeTimer = null;
     }
 
-    // Letter magnetic repulsion
-    DOM.titleLetters.forEach(letter => {
-      const lr  = letter.getBoundingClientRect();
-      const lx  = (lr.left + lr.right)   / 2 - rect.left;
-      const ly  = (lr.top  + lr.bottom)  / 2 - rect.top;
-      const dx  = lx - mx, dy = ly - my;
-      const dist = Math.hypot(dx, dy);
-      if (dist < 500) {
-        const f = (500 - dist) / 500;
-        letter.style.transform = `translate(${dx * f * 0.8}px,${dy * f * 0.8}px)`;
-      } else {
-        letter.style.transform = '';
-      }
-    });
+    // Letter magnetic repulsion — now handled by StarCursor gravity field
   });
 
   function _eeAnagramTransition() {
@@ -1230,82 +1220,14 @@ window.addEventListener('load', () => {
   function _eeLaunchSecret() {
     DOM.startScreen.style.display = 'none';
     DOM.container.style.display   = 'none';
+    stopTitleMusic();
+    TitleBG.stop();
+    StarCursor.disable();
 
-    const wrapper = document.createElement('div');
-    wrapper.style.cssText = 'width:400px;height:600px;background:#333;position:relative;overflow:hidden;' +
-      'border:5px solid #555;font-family:"Courier New",Courier,monospace;margin:0 auto;';
-    wrapper.innerHTML = `
-      <div style="position:absolute;width:100%;height:100%;background:#222;">
-        <div id="ee-lane" style="position:absolute;left:50%;transform:translateX(-50%);width:10px;height:1200px;border-left:10px dashed #fff;top:-600px;"></div>
-      </div>
-      <div id="ee-player" style="position:absolute;bottom:20px;left:175px;width:50px;height:80px;background:#f00;border-radius:8px;box-shadow:0 0 15px #f00;z-index:5;">
-        <div style="position:absolute;top:10px;left:5px;width:40px;height:25px;background:#88f;border-radius:4px;border:2px solid #fff;"></div>
-      </div>
-      <div style="position:absolute;top:10px;left:10px;color:#0f0;font-size:18px;z-index:20;">SCORE: <span id="ee-score">0</span></div>
-      <div id="ee-menu" style="position:absolute;inset:0;background:rgba(0,0,0,0.85);display:flex;flex-direction:column;justify-content:center;align-items:center;color:#fff;z-index:100;">
-        <h1 style="color:#ff0;">RATCHET CARS</h1>
-        <button id="ee-start" class="game-button">START ENGINE</button>
-      </div>`;
-    document.body.appendChild(wrapper);
-
-    const player    = document.getElementById('ee-player');
-    const scoreSpan = document.getElementById('ee-score');
-    const menu      = document.getElementById('ee-menu');
-    const lane      = document.getElementById('ee-lane');
-    let eeScore = 0, eeActive = false, eePos = 175, eeSpeed = 6, eeOffset = 0;
-    let enemies = [], eeKeys = {};
-
-    document.addEventListener('keydown', e => { eeKeys[e.code] = true;  });
-    document.addEventListener('keyup',   e => { eeKeys[e.code] = false; });
-
-    function spawnEnemy() {
-      const colors = ['#0af','#f0f','#0f0','#ff8','#fff'];
-      const el = document.createElement('div');
-      const c  = colors[Math.floor(Math.random() * colors.length)];
-      el.style.cssText = `position:absolute;width:50px;height:80px;background:${c};border-radius:8px;` +
-        `top:-100px;left:${Math.random() * 350}px;z-index:4;box-shadow:0 0 10px ${c};`;
-      wrapper.appendChild(el);
-      enemies.push({ el, top: -100 });
-    }
-
-    function eeLoop() {
-      if (!eeActive) return;
-      eeOffset = (eeOffset + eeSpeed) % 40;
-      lane.style.top = (eeOffset - 600) + 'px';
-      if (eeKeys['ArrowLeft']  && eePos > 0)   eePos -= 8;
-      if (eeKeys['ArrowRight'] && eePos < 350)  eePos += 8;
-      player.style.left = eePos + 'px';
-
-      for (let i = enemies.length - 1; i >= 0; i--) {
-        enemies[i].top += eeSpeed;
-        enemies[i].el.style.top = enemies[i].top + 'px';
-        const pr = player.getBoundingClientRect();
-        const er = enemies[i].el.getBoundingClientRect();
-        if (!(pr.right < er.left || pr.left > er.right || pr.bottom < er.top || pr.top > er.bottom)) {
-          eeActive = false;
-          alert('TOTALED! Score: ' + eeScore);
-          menu.style.display = 'flex';
-        }
-        if (enemies[i].top > 600) {
-          enemies[i].el.remove();
-          enemies.splice(i, 1);
-          eeScore++;
-          scoreSpan.innerText = eeScore;
-          if (eeScore % 10 === 0) eeSpeed += 0.5;
-        }
-      }
-      if (Math.random() < 0.03) spawnEnemy();
-      requestAnimationFrame(eeLoop);
-    }
-
-    document.getElementById('ee-start').onclick = () => {
-      enemies.forEach(en => en.el.remove());
-      enemies = []; eeScore = 0; eeSpeed = 6; eePos = 175;
-      scoreSpan.innerText = '0';
-      menu.style.display = 'none';
-      eeActive = true;
-      eeLoop();
-    };
+    // Mount Ratchet Cars into a dedicated container
+    const mount = document.getElementById('ratchet-cars-mount');
+    mount.style.display = 'flex';
+    RatchetCars.launch(mount);
   }
 
   // ─── 16. SETTINGS ───────────────────────────────────────────────────────────
@@ -1439,5 +1361,65 @@ window.addEventListener('load', () => {
   } else {
     DOM.titleCanvas.style.display = 'none';
   }
+
+  // ─── 19. STAR CURSOR ────────────────────────────────────────────────────────
+
+  StarCursor.init();
+
+  // Register title screen elements as gravity targets
+  // Letters get strong, close-range repulsion
+  StarCursor.registerGravityTargets(DOM.titleLetters, {
+    radius: 180,
+    strength: 1.1,
+    springK: 0.07,
+    damping: 0.80,
+    rotScale: 0.025,
+    scaleMin: 0.88,
+    scaleMax: 1.08,
+  });
+
+  // Subtitle + button row get softer, wider repulsion
+  StarCursor.registerGravityTargets(
+    [document.querySelector('.subtitle'), document.querySelector('.start-actions')],
+    {
+      radius: 150,
+      strength: 0.45,
+      springK: 0.10,
+      damping: 0.85,
+      rotScale: 0.008,
+      scaleMin: 0.96,
+      scaleMax: 1.02,
+    }
+  );
+
+  // Leaderboard + Settings headings (always registered, only visible on their screens)
+  StarCursor.registerGravityTargets(
+    [document.querySelector('.lb-heading'), document.querySelector('.settings-heading')],
+    {
+      radius: 160,
+      strength: 0.6,
+      springK: 0.09,
+      damping: 0.83,
+      rotScale: 0.012,
+      scaleMin: 0.94,
+      scaleMax: 1.04,
+    }
+  );
+
+  // Game-over title
+  StarCursor.registerGravityTargets(
+    document.querySelectorAll('.crash-title'),
+    {
+      radius: 170,
+      strength: 0.7,
+      springK: 0.08,
+      damping: 0.82,
+      rotScale: 0.015,
+      scaleMin: 0.92,
+      scaleMax: 1.05,
+    }
+  );
+
+  StarCursor.enable();   // start on title screen
 
 }); // end window load
