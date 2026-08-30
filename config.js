@@ -175,7 +175,28 @@ const CONFIG = Object.freeze({
   },
 
   LEADERBOARD: {
-    MAX_ENTRIES:       10
+    MAX_ENTRIES:       10,
+    // v3.1 — we over-fetch so one pilot can't wallpaper the board with ten
+    // runs. Rows are collapsed to a personal best before the top N is cut.
+    FETCH_MULTIPLIER:  6,
+    DEDUPE_BY_PILOT:   true,
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // v3.1 — ACCOUNTS
+  // Optional. A guest can play and post scores forever without one; an
+  // account just means the name follows you between devices and sessions.
+  // ─────────────────────────────────────────────────────────────────────────
+  ACCOUNT: {
+    PROFILE_TABLE:     'profiles',
+    NAME_MAX_LENGTH:   12,
+    MIN_PASSWORD:      8,
+    // Which OAuth providers to offer. Remove one here if it isn't enabled
+    // in the Supabase dashboard — the button disappears with it.
+    PROVIDERS: [
+      { id: 'google',  label: 'Google',  color: '#ffffff' },
+      //{ id: 'discord', label: 'Discord', color: '#8b9dff' },
+    ],
   },
 
   SUPABASE: {

@@ -87,10 +87,20 @@ window.addEventListener('load', () => {
     highScore:      document.getElementById('high-score'),
     maxCombo:       document.getElementById('max-combo'),
     nameEntry:      document.getElementById('name-entry'),
+    nameEntryGuest: document.getElementById('name-entry-guest'),
+    nameEntryUser:  document.getElementById('name-entry-user'),
+    nameEntrySignin:document.getElementById('name-entry-signin'),
+    postingAsName:  document.getElementById('posting-as-name'),
+    submitStatus:   document.getElementById('submit-status'),
     playerName:     document.getElementById('player-name'),
     submitScoreBtn: document.getElementById('submit-score-btn'),
+    submitScoreUserBtn: document.getElementById('submit-score-user-btn'),
     viewLbBtn:      document.getElementById('view-lb-btn'),
     rebootBtn:      document.getElementById('reboot-btn'),
+
+    // Account
+    accountScreen:  document.getElementById('account-screen'),
+    pilotChip:      document.getElementById('pilot-chip'),
 
     // corner markers
     eeCorners: {
@@ -1505,9 +1515,7 @@ window.addEventListener('load', () => {
       ).join('')}</div>` : ''}`;
 
     if (await Leaderboard.qualifies(state.score, state.sessionMaxCombo)) {
-      DOM.nameEntry.style.display = 'block';
-      DOM.playerName.value = '';
-      setTimeout(() => DOM.playerName.focus(), 50);
+      showNameEntry();
     } else {
       DOM.nameEntry.style.display = 'none';
     }
@@ -1517,12 +1525,72 @@ window.addEventListener('load', () => {
     StarCursor.enable();
   }
 
-  DOM.submitScoreBtn.addEventListener('click', () => {
-    const name = DOM.playerName.value || 'ANON';
-    Leaderboard.submit(name, state.score, state.sessionMaxCombo);
-    DOM.nameEntry.style.display = 'none';
+  /**
+   * v3.1 — the submission row adapts to who is playing.
+   * Signed in: nothing to type, the callsign is already known.
+   * Guest: an input prefilled with the last name used on this device.
+   */
+  function showNameEntry() {
+    const signedIn = Auth.isLoggedIn();
+
+    DOM.nameEntry.style.display       = 'block';
+    DOM.nameEntryUser.style.display   = signedIn ? 'flex' : 'none';
+    DOM.nameEntryGuest.style.display  = signedIn ? 'none' : 'flex';
+    DOM.nameEntrySignin.style.display = 'none';   // offered after the post
+    DOM.submitStatus.textContent      = '';
+    DOM.submitStatus.className        = 'submit-status';
+    DOM.submitScoreBtn.disabled       = false;
+    DOM.submitScoreUserBtn.disabled   = false;
+
+    if (signedIn) {
+      DOM.postingAsName.textContent = Auth.displayName();
+    } else {
+      DOM.playerName.value = Auth.guestName();
+      if (window.matchMedia('(min-width: 780px)').matches) {
+        setTimeout(() => { DOM.playerName.focus(); DOM.playerName.select(); }, 50);
+      }
+    }
+  }
+
+  async function submitRun(name) {
+    DOM.submitScoreBtn.disabled     = true;
+    DOM.submitScoreUserBtn.disabled = true;
+    DOM.submitStatus.className      = 'submit-status';
+    DOM.submitStatus.textContent    = 'POSTING…';
+
+    const ok = await Leaderboard.submit(name, state.score, state.sessionMaxCombo);
+
+    if (!ok) {
+      DOM.submitStatus.className      = 'submit-status is-error';
+      DOM.submitStatus.textContent    = "COULDN'T REACH THE BOARD — TRY AGAIN";
+      DOM.submitScoreBtn.disabled     = false;
+      DOM.submitScoreUserBtn.disabled = false;
+      return;
+    }
+
     AudioManager.play(880, 'sine', 0.4, 0.15);
+
+    if (Auth.isLoggedIn()) {
+      DOM.nameEntry.style.display = 'none';
+      return;
+    }
+
+    // Guests keep the panel so we can offer the upsell — but only now that the
+    // run is safely on the board, since signing in with a provider reloads the page.
+    DOM.nameEntryGuest.style.display  = 'none';
+    DOM.submitStatus.textContent      = 'SCORE POSTED AS ' + name;
+    DOM.nameEntrySignin.style.display = 'inline-block';
+  }
+
+  DOM.submitScoreBtn.addEventListener('click', () => {
+    const typed = Auth.sanitizeName(DOM.playerName.value) || 'ANON';
+    Auth.setGuestName(typed);   // so the next run comes prefilled
+    submitRun(typed);
   });
+
+  DOM.submitScoreUserBtn.addEventListener('click', () => submitRun(Auth.displayName()));
+
+  DOM.nameEntrySignin.addEventListener('click', () => AccountUI.open('gameover'));
 
   DOM.playerName.addEventListener('keydown', e => {
     if (e.key === 'Enter') DOM.submitScoreBtn.click();
@@ -1530,18 +1598,35 @@ window.addEventListener('load', () => {
 
   // ── Leaderboard rendering ───────────────────────────────────────────────────
 
+  function _escHtml(str) {
+    return String(str).replace(/[&<>"]/g, c =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+
   function _renderTable(entries, field, label) {
     if (!entries.length) {
       return `<p class="lb-empty">No entries yet — be the first!</p>`;
     }
     const medals = ['🥇', '🥈', '🥉'];
-    const rows = entries.map((e, i) => `
-      <tr class="lb-row${i < 3 ? ' lb-podium' : ''}">
+
+    // v3.1 — find yourself on the board. Signed-in pilots match on id;
+    // guests fall back to the name this device remembers.
+    const myId    = Auth.state().userId;
+    const myGuest = myId ? null : Auth.guestName();
+
+    const rows = entries.map((e, i) => {
+      const isMe = myId
+        ? e.userId === myId
+        : !!(myGuest && !e.registered && e.name === myGuest);
+      return `
+      <tr class="lb-row${i < 3 ? ' lb-podium' : ''}${isMe ? ' lb-you' : ''}">
         <td class="lb-rank">${medals[i] || (i + 1)}</td>
-        <td class="lb-name">${e.name}</td>
+        <td class="lb-name">${_escHtml(e.name)}${e.registered
+          ? '<span class="lb-verified" title="Registered pilot">★</span>' : ''}</td>
         <td class="lb-val">${field === 'combo' ? 'x' : ''}${e[field]}</td>
-        <td class="lb-date">${e.date}</td>
-      </tr>`).join('');
+        <td class="lb-date">${_escHtml(e.date)}</td>
+      </tr>`;
+    }).join('');
     return `
       <table class="lb-table">
         <thead><tr><th>#</th><th>PILOT</th><th>${label}</th><th>DATE</th></tr></thead>
@@ -1750,6 +1835,7 @@ window.addEventListener('load', () => {
       DOM.startScreen.style.display    = 'none';
       DOM.lbScreen.style.display       = 'none';
       DOM.settingsScreen.style.display = 'none';
+      DOM.accountScreen.style.display  = 'none';
       DOM.container.style.display      = 'block';
 
       // Prep the game visually so tutorial has context
@@ -1777,6 +1863,7 @@ window.addEventListener('load', () => {
     DOM.startScreen.style.display    = 'none';
     DOM.lbScreen.style.display       = 'none';
     DOM.settingsScreen.style.display = 'none';
+    DOM.accountScreen.style.display  = 'none';
     DOM.gameOver.style.display       = 'none';
     DOM.countdown.style.display      = 'none';
     DOM.nameEntry.style.display      = 'none';
@@ -1977,6 +2064,49 @@ window.addEventListener('load', () => {
   DOM.settingsBtnGO.addEventListener('click',    () => openSettings('gameover'));
   DOM.settingsBackBtn.addEventListener('click',   closeSettings);
 
+  // ─── 16b. ACCOUNTS ──────────────────────────────────────────────────────────
+  // AccountUI owns the PILOT ID screen; game.js owns music, the title
+  // background and the cursor, so screen transitions come back through here.
+
+  AccountUI.init({
+    enterScreen(from) {
+      if (from === 'start') {
+        DOM.startScreen.style.display = 'none';
+        TitleBG.stop();
+        stopTitleMusic();
+      } else if (from === 'settings') {
+        DOM.settingsScreen.style.display = 'none';
+      } else if (from === 'gameover') {
+        DOM.gameOver.style.display  = 'none';
+        DOM.container.style.display = 'none';
+      }
+      StarCursor.enable();
+    },
+
+    exitScreen(from) {
+      if (from === 'start') {
+        DOM.startScreen.style.display = 'flex';
+        if (settings.fancyStars) TitleBG.start();
+        startTitleMusic();
+      } else if (from === 'settings') {
+        DOM.settingsScreen.style.display = 'flex';
+      } else if (from === 'gameover') {
+        DOM.container.style.display = 'block';
+        DOM.gameOver.style.display  = 'block';
+      }
+    },
+
+    onIdentity() {
+      // A new pilot means a different "YOU" row and possibly a new name on
+      // existing entries, so the cached board is no longer trustworthy.
+      Leaderboard.refresh();
+      if (DOM.lbScreen.style.display  === 'flex')  renderLeaderboard();
+      if (DOM.nameEntry.style.display === 'block') showNameEntry();
+    },
+
+    blip: (hz, type, dur, vol) => AudioManager.play(hz, type, dur, vol),
+  });
+
   // ── Fancy Stars toggle ──────────────────────────────────────────────────────
 
   DOM.fancyStarsToggle.addEventListener('change', () => {
@@ -2093,7 +2223,9 @@ window.addEventListener('load', () => {
 
   // Leaderboard + Settings headings (always registered, only visible on their screens)
   StarCursor.registerGravityTargets(
-    [document.querySelector('.lb-heading'), document.querySelector('.settings-heading')],
+    [document.querySelector('.lb-heading'),
+     document.querySelector('.settings-heading'),
+     document.querySelector('.account-heading')],
     {
       radius: 160,
       strength: 0.6,
@@ -2131,6 +2263,9 @@ window.addEventListener('load', () => {
     grantPerk:   id => { Upgrades.take(id, { grantLife: n => { state.lives += n; updateLives(); } });
                          setPaddleWidth(Upgrades.paddleWidth()); renderPerkStrip(); },
     pauseGame, resumeGame,
+    // v3.1
+    Auth, AccountUI, Leaderboard,
+    showNameEntry, renderLeaderboard,
   };
 
 }); // end window load
