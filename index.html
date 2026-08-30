@@ -11,6 +11,13 @@
 <!-- ═══════════════════════════════════════════════════════ START SCREEN ═══ -->
 <div id="start-screen">
   <canvas id="title-canvas"></canvas>
+
+  <!-- Who's playing. Centred so it stays clear of the corner triggers. -->
+  <div id="pilot-chip" class="pilot-chip" role="button" tabindex="0" title="Sign in, or keep playing as a guest">
+    <span id="pilot-chip-badge" class="pilot-chip-badge">+</span>
+    <span id="pilot-chip-name"  class="pilot-chip-name">SIGN IN</span>
+  </div>
+
   <h1 id="floating-title">
     <span>S</span><span>T</span><span>A</span><span>R</span>
     <span class="title-gap">C</span><span>A</span><span>T</span><span>C</span><span>H</span><span>E</span><span>R</span>
@@ -51,9 +58,98 @@
   <button id="lb-back-btn" class="game-button lb-back">← Back</button>
 </div>
 
+<!-- ═════════════════════════════════════════════════════════ ACCOUNT SCREEN ═══ -->
+<div id="account-screen">
+  <h2 class="account-heading">◈ PILOT ID ◈</h2>
+
+  <!-- ── Signed out ── -->
+  <div id="account-signed-out" class="account-body">
+    <p class="account-blurb">
+      Sign in and your callsign follows you — every device, every run.
+      Guests are welcome on the board too; you'll just retype your name now and then.
+    </p>
+
+    <div id="oauth-row" class="oauth-row"><!-- built from CONFIG.ACCOUNT.PROVIDERS --></div>
+
+    <div class="account-divider"><span>or use an email</span></div>
+
+    <div class="account-tabs">
+      <button type="button" class="account-tab active" data-mode="signin">SIGN IN</button>
+      <button type="button" class="account-tab"        data-mode="signup">CREATE ACCOUNT</button>
+    </div>
+
+    <form id="account-form" class="account-form">
+      <label class="account-field">
+        <span class="account-field-label">EMAIL</span>
+        <input id="account-email" type="email" autocomplete="email"
+               spellcheck="false" placeholder="you@example.com">
+      </label>
+
+      <label class="account-field">
+        <span class="account-field-label">PASSWORD</span>
+        <input id="account-password" type="password" autocomplete="current-password"
+               placeholder="••••••••">
+      </label>
+
+      <label class="account-field" id="account-name-field" style="display:none;">
+        <span class="account-field-label">CALLSIGN</span>
+        <input id="account-newname" type="text" maxlength="12" autocomplete="nickname"
+               spellcheck="false" placeholder="PILOT">
+      </label>
+
+      <button id="account-submit" type="submit" class="game-button account-submit">SIGN IN</button>
+    </form>
+
+    <button id="account-forgot" type="button" class="account-link">Forgot your password?</button>
+  </div>
+
+  <!-- ── Signed in ── -->
+  <div id="account-signed-in" class="account-body" style="display:none;">
+    <div class="account-identity">
+      <div id="account-avatar" class="account-avatar">P</div>
+      <div>
+        <div id="account-name-display" class="account-name-display"></div>
+        <div id="account-email-display" class="account-sub"></div>
+        <div id="account-provider-tag"  class="account-sub account-sub-dim"></div>
+      </div>
+    </div>
+
+    <div class="account-field">
+      <span class="account-field-label">CALLSIGN</span>
+      <div class="account-rename-row">
+        <input id="account-rename" type="text" maxlength="12" spellcheck="false">
+        <button id="account-rename-btn" type="button" class="game-button account-mini">SAVE</button>
+      </div>
+    </div>
+    <p class="settings-hint account-hint">
+      Up to 12 characters — letters, numbers, spaces, dashes. This is the name the board shows.
+    </p>
+
+    <button id="account-signout-btn" type="button" class="game-button account-danger">SIGN OUT</button>
+  </div>
+
+  <p id="account-msg" class="account-msg"></p>
+  <button id="account-back-btn" class="game-button account-back">← Back</button>
+</div>
+
 <!-- ═══════════════════════════════════════════════════════ SETTINGS SCREEN ═══ -->
 <div id="settings-screen">
   <h2 class="settings-heading">⚙ SETTINGS</h2>
+
+  <!-- Account — reachable from pause and game over as well as the title -->
+  <div class="settings-section">
+    <h3 class="settings-label">ACCOUNT</h3>
+    <div class="settings-account-row">
+      <span id="settings-account-line" class="settings-account-line">Not signed in</span>
+      <button id="settings-account-action" type="button" class="game-button account-mini">Sign in</button>
+    </div>
+    <div id="settings-guest-row" class="settings-slider-row settings-guest-row">
+      <span class="slider-label">Guest name</span>
+      <input id="settings-guest-name" type="text" maxlength="12" spellcheck="false"
+             autocomplete="off" placeholder="ANON" class="guest-name-input">
+    </div>
+    <p class="settings-hint settings-guest-hint">Remembered on this device so you don't retype it after every run.</p>
+  </div>
 
   <!-- Visual settings -->
   <div class="settings-section">
@@ -161,11 +257,24 @@
     <!-- Name entry — shown only when player qualifies for leaderboard -->
     <div id="name-entry" style="display:none;">
       <p class="qualify-notice">🏆 YOU MADE THE HALL OF FAME!</p>
-      <div class="name-input-row">
-        <input id="player-name" type="text" maxlength="10"
+
+      <!-- Guest: type a name (prefilled with the last one used on this device) -->
+      <div id="name-entry-guest" class="name-input-row">
+        <input id="player-name" type="text" maxlength="12"
                placeholder="ENTER NAME" autocomplete="off" spellcheck="false">
         <button id="submit-score-btn" class="game-button">SUBMIT</button>
       </div>
+
+      <!-- Signed in: nothing to type -->
+      <div id="name-entry-user" class="name-entry-user" style="display:none;">
+        <span class="posting-as">POSTING AS <b id="posting-as-name"></b></span>
+        <button id="submit-score-user-btn" class="game-button">SUBMIT</button>
+      </div>
+
+      <button id="name-entry-signin" type="button" class="account-link name-entry-signin">
+        Sign in to keep this name for good
+      </button>
+      <p id="submit-status" class="submit-status"></p>
     </div>
 
     <div class="game-over-actions">
@@ -221,6 +330,8 @@
 <script src="audio.js"></script>
 <script src="stages.js"></script>
 <script src="upgrades.js"></script>
+<script src="auth.js"></script>
+<script src="account-ui.js"></script>
 <script src="leaderboard.js"></script>
 <script src="title-bg.js"></script>
 <script src="ratchet-cars.js"></script>
