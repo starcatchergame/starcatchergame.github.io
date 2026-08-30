@@ -15,11 +15,18 @@
     <span>S</span><span>T</span><span>A</span><span>R</span>
     <span class="title-gap">C</span><span>A</span><span>T</span><span>C</span><span>H</span><span>E</span><span>R</span>
   </h1>
-  <p class="subtitle">Press SPACE to Pause during gameplay.</p>
+  <p class="subtitle">Every stage shows you its ghost before it counts.</p>
   <div class="start-actions">
     <button id="start-game-btn" class="game-button">Start Game</button>
     <button id="leaderboard-btn" class="game-button lb-open-btn">★ Hall of Fame</button>
     <button id="settings-btn-start" class="game-button settings-open-btn">⚙ Settings</button>
+  </div>
+
+  <!-- v3: seeded runs — leave blank for random, paste a code to replay a run -->
+  <div class="seed-row">
+    <label for="seed-input">SEED</label>
+    <input id="seed-input" type="text" maxlength="14" placeholder="RANDOM"
+           autocomplete="off" spellcheck="false">
   </div>
 
   <!-- Easter Egg corner triggers -->
@@ -91,27 +98,52 @@
 
   <canvas id="bg-canvas"></canvas>
 
-  <!-- Countdown overlay -->
+  <!-- v3: ghost landing markers sit above the background, below the stars -->
+  <div id="ghost-marker-pool"></div>
+
+  <!-- Countdown overlay (resume from pause) -->
   <div id="countdown"></div>
+
+  <!-- v3: stage progress bar across the top -->
+  <div id="stage-progress-wrap"><div id="stage-progress-fill"></div></div>
 
   <!-- HUD -->
   <div id="ui-left">
     <div id="score">SCORE: 000</div>
     <div id="lives">LIVES: ❤❤❤</div>
+    <div id="shield-indicator" style="display:none;"></div>
   </div>
   <div id="ui-right">
+    <div id="stage-indicator">STAGE 1</div>
+    <div id="phase-indicator"></div>
     <div id="combo">COMBO x1</div>
   </div>
 
-  <!-- Milestone / upgrade chooser -->
-  <div id="milestone-menu" class="overlay-panel" style="display:none;border-color:#ff00ff;box-shadow:0 0 50px #ff00ff;">
-    <h2 class="overlay-title" style="color:#ff00ff;text-shadow:0 0 10px #ff00ff;">LEVEL UP: CHOOSE UPGRADE</h2>
-    <button id="discovery-btn" class="game-button" style="border-color:#00ffcc;color:#00ffcc;">
-      Discover Nebula<br><span class="btn-sub">Expand Paddle</span>
-    </button>
-    <button id="security-btn" class="game-button" style="border-color:#ff4444;color:#ff4444;">
-      Comet Security<br><span class="btn-sub">+1 Extra Life</span>
-    </button>
+  <!-- v3: owned perks + run seed along the bottom -->
+  <div id="perk-strip"></div>
+  <div id="seed-label"></div>
+
+  <!-- v3: big centred stage banner -->
+  <div id="stage-banner" class="stage-banner" style="display:none;">
+    <div id="stage-banner-title"></div>
+    <div id="stage-banner-sub"></div>
+  </div>
+
+  <!-- v3: stage clear summary -->
+  <div id="stage-clear-panel" class="overlay-panel" style="display:none;">
+    <h2 id="stage-clear-title" class="overlay-title">STAGE CLEAR</h2>
+    <div id="stage-clear-stats" class="sc-stats"></div>
+  </div>
+
+  <!-- v3: upgrade draft -->
+  <div id="draft-panel" class="overlay-panel draft" style="display:none;">
+    <h2 id="draft-title" class="overlay-title">CHOOSE AN UPGRADE</h2>
+    <p id="draft-sub" class="draft-sub"></p>
+    <div id="draft-cards"></div>
+    <div class="draft-actions">
+      <button id="draft-reroll-btn" class="game-button draft-minor">REROLL (2)</button>
+      <button id="draft-skip-btn"   class="game-button draft-minor">SKIP</button>
+    </div>
   </div>
 
   <!-- Game over -->
@@ -122,6 +154,9 @@
       <p id="high-score"></p>
       <p id="max-combo"></p>
     </div>
+
+    <!-- v3: run breakdown -->
+    <div id="run-summary" class="run-summary"></div>
 
     <!-- Name entry — shown only when player qualifies for leaderboard -->
     <div id="name-entry" style="display:none;">
@@ -184,6 +219,8 @@
 <!-- Load modules in dependency order -->
 <script src="config.js"></script>
 <script src="audio.js"></script>
+<script src="stages.js"></script>
+<script src="upgrades.js"></script>
 <script src="leaderboard.js"></script>
 <script src="title-bg.js"></script>
 <script src="ratchet-cars.js"></script>
