@@ -1,7 +1,16 @@
 'use strict';
 
 /**
- * Star Catcher v2.2 — Main Game Controller
+ * Star Catcher v3 — Main Game Controller
+ *
+ * v3 Stage overhaul:
+ *   - The endless spawn stream is replaced by discrete STAGES of FRAMES
+ *   - Every stage is previewed by a non-scoring GHOST PASS
+ *   - Difficulty is driven by stage number, not by score or combo
+ *   - Stages are separated by a perk DRAFT (run-defining build choices)
+ *   - Runs are seeded and reproducible
+ *
+ * v2.2 Performance overhaul:
  *
  * v2.2 Performance overhaul:
  *   - Single centralised game loop (one rAF drives all objects + particles)
@@ -19,9 +28,10 @@
  *   5. UI updates
  *   6. Object pool
  *   7. Particle pool (explosions)
+ *   7c. Ghost landing markers
  *   8. Central game loop
- *   9. Spawn scheduling
- *  10. Milestone / upgrades
+ *   9. Stage director (frames, ghost pass, live pass)
+ *  10. Draft (perk selection between stages)
  *  11. Pause
  *  12. Countdown
  *  13. Game over + leaderboard UI
@@ -46,6 +56,7 @@ window.addEventListener('load', () => {
     startGameBtn:   document.getElementById('start-game-btn'),
     leaderboardBtn: document.getElementById('leaderboard-btn'),
     floatingTitle:  document.getElementById('floating-title'),
+    seedInput:      document.getElementById('seed-input'),
     titleLetters:   document.querySelectorAll('#floating-title span'),
     titleCanvas:    document.getElementById('title-canvas'),
 
@@ -67,9 +78,6 @@ window.addEventListener('load', () => {
     countdown:      document.getElementById('countdown'),
 
     // Overlays
-    milestoneMenu:  document.getElementById('milestone-menu'),
-    discoveryBtn:   document.getElementById('discovery-btn'),
-    securityBtn:    document.getElementById('security-btn'),
     gameOver:       document.getElementById('game-over'),
     pauseMenu:      document.getElementById('pause-menu'),
     resumeBtn:      document.getElementById('resume-btn'),
@@ -118,6 +126,35 @@ window.addEventListener('load', () => {
 
     // Precision float pool
     precisionFloatPool: document.getElementById('precision-float-pool'),
+
+    // ── v3: stage HUD ──
+    stageIndicator:    document.getElementById('stage-indicator'),
+    phaseIndicator:    document.getElementById('phase-indicator'),
+    stageProgressWrap: document.getElementById('stage-progress-wrap'),
+    stageProgressFill: document.getElementById('stage-progress-fill'),
+    shieldIndicator:   document.getElementById('shield-indicator'),
+    perkStrip:         document.getElementById('perk-strip'),
+    seedLabel:         document.getElementById('seed-label'),
+    ghostMarkerPool:   document.getElementById('ghost-marker-pool'),
+
+    // ── v3: stage banner + stage-clear panel ──
+    stageBanner:       document.getElementById('stage-banner'),
+    stageBannerTitle:  document.getElementById('stage-banner-title'),
+    stageBannerSub:    document.getElementById('stage-banner-sub'),
+    stageClearPanel:   document.getElementById('stage-clear-panel'),
+    stageClearTitle:   document.getElementById('stage-clear-title'),
+    stageClearStats:   document.getElementById('stage-clear-stats'),
+
+    // ── v3: draft ──
+    draftPanel:        document.getElementById('draft-panel'),
+    draftTitle:        document.getElementById('draft-title'),
+    draftSub:          document.getElementById('draft-sub'),
+    draftCards:        document.getElementById('draft-cards'),
+    draftRerollBtn:    document.getElementById('draft-reroll-btn'),
+    draftSkipBtn:      document.getElementById('draft-skip-btn'),
+
+    // ── v3: run summary on the game-over panel ──
+    runSummary:        document.getElementById('run-summary'),
   };
 
   const canvasCtx = DOM.canvas.getContext('2d');
@@ -222,15 +259,21 @@ window.addEventListener('load', () => {
     paused:          false,
     countingDown:    false,
     paddleExpanded:  false,
-    milestoneJustEnded: false,
 
     lbOpenedFromGameOver: false,  // tracks which screen to return to from leaderboard
 
     // v2.2: cached difficulty value, updated once per frame
     cachedDifficulty: 0,
 
+    // v3: run-level bookkeeping
+    stagesCleared:   0,
+    runSeed:         0,
+    runSeedCode:     '',
+    totalGhostCatches: 0,
+    totalMisses:     0,
+    perfectStages:   0,
+
     // Timer handles for cleanup
-    spawnTimer:      null,
     discoveryTimer:  null,
     starsRaf:        null,
     gameLoopRaf:     null,   // v2.2: central game loop handle
@@ -356,8 +399,8 @@ window.addEventListener('load', () => {
    * v2.2 — Pre-allocated pool of DOM elements for falling objects.
    * Instead of createElement/remove on every spawn, we show/hide pooled divs.
    */
-  const POOL_SIZE = 30;
-  const objectPool = [];          // { el, active, x, y, speed, size, isChroma, color }
+  const POOL_SIZE = 72;           // v3: ghost + live stars, multi-star frames, echoes
+  const objectPool = [];          // { el, active, x, y, speed, size, isChroma, isGhost, ... }
   const activeObjects = [];       // pool indices of currently-falling objects
 
   function initObjectPool() {
@@ -376,6 +419,9 @@ window.addEventListener('load', () => {
         speed: 0,
         size: 0,
         isChroma: false,
+        isGhost:  false,     // v3: ghost stars never score and never cost lives
+        isEcho:   false,     // v3: spawned by the ECHO perk
+        lying:    false,     // v3: this ghost is showing a false position
         color: '',
       });
     }
@@ -398,7 +444,7 @@ window.addEventListener('load', () => {
     const obj = objectPool[poolIdx];
     obj.active = false;
     obj.el.style.display = 'none';
-    obj.el.classList.remove('rainbow');
+    obj.el.classList.remove('rainbow', 'ghost-obj', 'ghost-chroma');
     const aidx = activeObjects.indexOf(poolIdx);
     if (aidx !== -1) {
       activeObjects[aidx] = activeObjects[activeObjects.length - 1];
@@ -412,9 +458,18 @@ window.addEventListener('load', () => {
       const obj = objectPool[activeObjects[i]];
       obj.active = false;
       obj.el.style.display = 'none';
-      obj.el.classList.remove('rainbow');
+      obj.el.classList.remove('rainbow', 'ghost-obj', 'ghost-chroma');
     }
     activeObjects.length = 0;
+  }
+
+  /** v3 — how many pooled objects of a given kind are still falling. */
+  function countActive(isGhost) {
+    let n = 0;
+    for (let i = 0; i < activeObjects.length; i++) {
+      if (objectPool[activeObjects[i]].isGhost === isGhost) n++;
+    }
+    return n;
   }
 
   // ─── 7. PARTICLE POOL (explosions) ─────────────────────────────────────
@@ -538,6 +593,148 @@ window.addEventListener('load', () => {
     setTimeout(() => el.remove(), CONFIG.PRECISION.FLOAT_DURATION_MS + 50);
   }
 
+  // ─── 7c. GHOST LANDING MARKERS ─────────────────────────────────────────
+
+  /**
+   * v3 — When a ghost star reaches the floor it leaves a glowing beam at that
+   * x. This is the clearest possible statement of "a star is going to land
+   * HERE", which is the whole point of the ghost pass.
+   */
+  const markerPool = [];
+
+  function initMarkerPool() {
+    DOM.ghostMarkerPool.innerHTML = '';
+    markerPool.length = 0;
+    for (let i = 0; i < CONFIG.GHOST.MARKER_POOL_SIZE; i++) {
+      const el = document.createElement('div');
+      el.className = 'ghost-marker';
+      el.style.display = 'none';
+      DOM.ghostMarkerPool.appendChild(el);
+      markerPool.push({ el, active: false });
+    }
+  }
+
+  /**
+   * Drop a landing marker.
+   * @param {number} x        centre x in container space
+   * @param {boolean} sticky  keep it lit until the stage ends (SIGHTLINE perk)
+   */
+  function dropGhostMarker(x, sticky) {
+    const slot = markerPool.find(m => !m.active) || markerPool[0];
+    slot.active = true;
+    const el = slot.el;
+    el.classList.remove('sticky', 'fading');
+    // force reflow so the animation restarts cleanly on a reused element
+    void el.offsetWidth;
+    el.style.left    = (x - CONFIG.GHOST.MARKER_WIDTH / 2) + 'px';
+    el.style.display = 'block';
+    if (sticky) {
+      el.classList.add('sticky');
+    } else {
+      el.classList.add('fading');
+      setTimeout(() => {
+        el.style.display = 'none';
+        slot.active = false;
+      }, CONFIG.GHOST.MARKER_FADE_MS);
+    }
+  }
+
+  /** Fade out any sticky markers (called between passes / on stage end). */
+  function fadeGhostMarkers() {
+    markerPool.forEach(m => {
+      if (!m.active) return;
+      m.el.classList.remove('sticky');
+      m.el.classList.add('fading');
+      setTimeout(() => { m.el.style.display = 'none'; m.active = false; },
+                 CONFIG.GHOST.MARKER_FADE_MS);
+    });
+  }
+
+  /** Hard clear — no animation. */
+  function clearGhostMarkers() {
+    markerPool.forEach(m => {
+      m.el.style.display = 'none';
+      m.el.classList.remove('sticky', 'fading');
+      m.active = false;
+    });
+  }
+
+  // ─── 7d. STAGE HUD + BANNERS ───────────────────────────────────────────
+
+  let _bannerTimer = null;
+
+  /** Big centred banner: title line + optional subtitle. */
+  function showBanner(title, sub, ms, cls) {
+    clearTimeout(_bannerTimer);
+    DOM.stageBannerTitle.textContent = title;
+    DOM.stageBannerSub.textContent   = sub || '';
+    DOM.stageBanner.className = 'stage-banner' + (cls ? ' ' + cls : '');
+    DOM.stageBanner.style.display = 'block';
+    // restart the pop animation
+    void DOM.stageBanner.offsetWidth;
+    DOM.stageBanner.classList.add('show');
+    if (ms) {
+      _bannerTimer = setTimeout(() => {
+        DOM.stageBanner.classList.remove('show');
+        DOM.stageBanner.style.display = 'none';
+      }, ms);
+    }
+  }
+
+  function hideBanner() {
+    clearTimeout(_bannerTimer);
+    DOM.stageBanner.classList.remove('show');
+    DOM.stageBanner.style.display = 'none';
+  }
+
+  /** Small transient toast near the paddle (SHIELD, SECOND WIND, CHROMA). */
+  function showToast(text, cls) {
+    const el = document.createElement('div');
+    el.className = 'stage-toast ' + (cls || '');
+    el.textContent = text;
+    DOM.precisionFloatPool.appendChild(el);
+    setTimeout(() => el.remove(), 1200);
+  }
+
+  function updateStageHUD() {
+    DOM.stageIndicator.textContent = 'STAGE ' + (stage.num || 1);
+
+    const phaseText = {
+      intro:     'BRIEFING',
+      ghost:     'GHOST PASS',
+      interlude: 'GET READY',
+      live:      'LIVE',
+      clearing:  'STAGE CLEAR',
+      draft:     'UPGRADE',
+      idle:      '',
+    }[stage.phase] || '';
+    DOM.phaseIndicator.textContent = phaseText;
+    DOM.phaseIndicator.className = 'phase-' + stage.phase;
+
+    const total = Math.max(1, stage.starsTotal);
+    const pct   = stage.phase === 'ghost'
+      ? (stage.ghostShown / total) * 100
+      : (stage.resolved / total) * 100;
+    DOM.stageProgressFill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    DOM.stageProgressWrap.classList.toggle('is-ghost', stage.phase === 'ghost');
+
+    if (stage.shields > 0) {
+      DOM.shieldIndicator.style.display = 'block';
+      DOM.shieldIndicator.textContent = 'SHIELD ' + '\u25C8'.repeat(stage.shields);
+    } else {
+      DOM.shieldIndicator.style.display = 'none';
+    }
+  }
+
+  function renderPerkStrip() {
+    const owned = Upgrades.ownedSummary();
+    if (!owned.length) { DOM.perkStrip.innerHTML = ''; return; }
+    DOM.perkStrip.innerHTML = owned.map(p =>
+      `<span class="perk-chip rarity-${p.rarity}" title="${p.name} — ${p.desc}">` +
+      `${p.icon}${p.stacks > 1 ? '<b>x' + p.stacks + '</b>' : ''}</span>`
+    ).join('');
+  }
+
   // ─── 8. CENTRAL GAME LOOP ──────────────────────────────────────────────
 
   /**
@@ -551,18 +748,16 @@ window.addEventListener('load', () => {
    * since it operates on a separate <canvas> and doesn't touch game DOM.
    */
 
-  /** v2.2 — Logarithmic difficulty curve, computed once per frame. */
+  /**
+   * v3 — Difficulty comes from the STAGE NUMBER only.
+   *
+   * This is the single most important change for pacing. Previously a good
+   * run raised score and combo, which raised difficulty, which meant playing
+   * well made the game harder mid-stage and the ramp outran the player. Now
+   * the curve is fixed and knowable: stage N always feels like stage N.
+   */
   function computeDifficulty() {
-    const D = CONFIG.DIFFICULTY;
-    const scoreFactor = Math.min(1,
-      Math.log(1 + state.score / D.SCORE_SCALE) /
-      Math.log(1 + D.SCORE_CAP   / D.SCORE_SCALE)
-    );
-    const comboFactor = Math.min(1,
-      Math.log(1 + state.combo / D.COMBO_SCALE) /
-      Math.log(1 + D.COMBO_CAP   / D.COMBO_SCALE)
-    );
-    return Math.min(1, D.SCORE_WEIGHT * scoreFactor + D.COMBO_WEIGHT * comboFactor);
+    return StageGen.difficultyFor(Math.max(1, stage.num));
   }
 
   /** Paddle bounding box computed from JS state — zero layout queries. */
@@ -574,6 +769,136 @@ window.addEventListener('load', () => {
       top:    layout.containerH - CONFIG.PADDLE.BOTTOM_OFFSET - paddleState.height,
       bottom: layout.containerH - CONFIG.PADDLE.BOTTOM_OFFSET,
     };
+  }
+
+  // ─── 8b. CATCH / MISS RESOLUTION ───────────────────────────────────────
+
+  /**
+   * v3 — A ghost star was caught.
+   *
+   * By design this is worth NOTHING. No score, no combo, no life. It exists
+   * purely so the ghost pass reads as a real, tactile rehearsal instead of a
+   * cutscene you sit through. The only thing it does is tick a counter, which
+   * the PRECOGNITION perk can later turn into an end-of-stage payout — an
+   * opt-in build choice rather than a baseline reward.
+   */
+  function onGhostCaught(obj) {
+    stage.ghostCatches++;
+    state.totalGhostCatches++;
+    AudioManager.play(CONFIG.GHOST.CATCH_HZ + Math.min(300, stage.ghostCatches * 8),
+                      'sine', 0.07, 0.05);
+    dropGhostMarker(obj.x + obj.size / 2, Upgrades.mods.keepGhostMarkers);
+    // A faint tick on the paddle so the catch feels acknowledged.
+    DOM.paddle.classList.add('ghost-ping');
+    setTimeout(() => DOM.paddle.classList.remove('ghost-ping'), 120);
+  }
+
+  /** v3 — A ghost star reached the floor. Costs nothing; leaves a marker. */
+  function onGhostLanded(obj) {
+    dropGhostMarker(obj.x + obj.size / 2, Upgrades.mods.keepGhostMarkers);
+    AudioManager.play(CONFIG.GHOST.LAND_HZ, 'sine', 0.05, 0.025);
+  }
+
+  /** v3 — A real star was caught. All scoring lives here. */
+  function onLiveCaught(obj) {
+    const M = Upgrades.mods;
+
+    state.combo += M.comboGrowth;
+    if (state.combo > state.sessionMaxCombo) state.sessionMaxCombo = state.combo;
+
+    // Precision scoring: how close to paddle centre? STEADY_HAND widens the
+    // window by shrinking the distance we measure against.
+    const objCenterX = obj.x + obj.size / 2;
+    const halfW      = Math.max(1, (paddleState.width / 2) * M.precisionWidthMult);
+    const distFromCenter = Math.abs(objCenterX - paddleState.x);
+    const precision  = 1 - Math.min(1, distFromCenter / halfW);
+    const P          = CONFIG.PRECISION;
+    const precisionMult = P.EDGE_MULT + (Upgrades.centerMult() - P.EDGE_MULT) * precision;
+
+    const unit = obj.isChroma
+      ? CONFIG.OBJECTS.CHROMA_SCORE * M.chromaScoreMult
+      : CONFIG.OBJECTS.STAR_SCORE;
+    const basePoints  = unit * Math.max(1, state.combo);
+    const finalPoints = Math.round(basePoints * precisionMult * M.scoreMult);
+
+    state.score += finalPoints;
+    updateScore();
+    updateCombo();
+
+    if (settings.scorePopups) {
+      showPrecisionFloat(objCenterX, obj.y, finalPoints, precision);
+    }
+
+    AudioManager.play(
+      (obj.isChroma ? CONFIG.AUDIO.CHROMA_BASE_HZ : CONFIG.AUDIO.CATCH_BASE_HZ) + state.combo * 20,
+      'square', 0.1
+    );
+    createExplosion(obj.x, obj.y, obj.isChroma ? '#fff' : obj.color);
+    impactEffect();
+
+    stage.caught++;
+    stage.resolved++;
+
+    // v3 — Chroma no longer interrupts the stage. It banks an extra pick for
+    // the draft at the end of the stage, so flow is never broken mid-pattern.
+    if (obj.isChroma && CONFIG.DRAFT.CHROMA_GRANTS_PICK &&
+        stage.bonusPicks < CONFIG.DRAFT.MAX_BONUS_PICKS) {
+      stage.bonusPicks++;
+      AudioManager.play(CONFIG.AUDIO.MILESTONE_HZ, 'square', 0.35, 0.13);
+      showToast('CHROMA — EXTRA PICK', 'toast-chroma');
+    }
+    updateStageHUD();
+  }
+
+  /**
+   * v3 — A real star hit the floor.
+   * @returns {boolean} true if this ends the run.
+   */
+  function onLiveMissed(obj) {
+    const M = Upgrades.mods;
+    stage.resolved++;
+
+    // Missing a Chroma is a lost opportunity, not a punishment.
+    if (obj.isChroma) {
+      state.combo = 0;
+      updateCombo();
+      updateStageHUD();
+      return false;
+    }
+
+    stage.missed++;
+    state.totalMisses++;
+
+    // AEGIS shields absorb the whole consequence, combo included.
+    if (stage.shields > 0) {
+      stage.shields--;
+      AudioManager.play(CONFIG.AUDIO.SHIELD_HZ, 'triangle', 0.25, 0.14);
+      showToast('SHIELD', 'toast-shield');
+      updateStageHUD();
+      return false;
+    }
+
+    state.combo = 0;
+    state.lives -= M.missLifeCost;
+    updateLives();
+    updateCombo();
+    updateStageHUD();
+    AudioManager.play(CONFIG.AUDIO.MISS_HZ, 'sawtooth', 0.3, 0.2);
+    DOM.container.classList.add('shake');
+    setTimeout(() => DOM.container.classList.remove('shake'), 300);
+
+    if (state.lives <= 0) {
+      if (M.revives > 0) {
+        M.revives--;
+        state.lives = 1;
+        updateLives();
+        AudioManager.play(880, 'sine', 0.5, 0.2);
+        showBanner('SECOND WIND', 'One more chance.', 1100, 'banner-revive');
+        return false;
+      }
+      return true;
+    }
+    return false;
   }
 
   function gameLoop() {
@@ -605,55 +930,21 @@ window.addEventListener('load', () => {
                   obj.x   <= pRect.right && oRight >= pRect.left;
 
       if (hit) {
-        state.combo++;
-        if (state.combo > state.sessionMaxCombo) state.sessionMaxCombo = state.combo;
-
-        // v2.2 — Precision scoring: how close to paddle center?
-        const objCenterX   = obj.x + obj.size / 2;
-        const paddleCenterX = paddleState.x;
-        const halfW        = paddleState.width / 2;
-        const distFromCenter = Math.abs(objCenterX - paddleCenterX);
-        const precision    = 1 - Math.min(1, distFromCenter / halfW);   // 0 = edge, 1 = dead center
-        const P = CONFIG.PRECISION;
-        const precisionMult = P.EDGE_MULT + (P.CENTER_MULT - P.EDGE_MULT) * precision;
-
-        const basePoints = (obj.isChroma ? CONFIG.OBJECTS.CHROMA_SCORE : CONFIG.OBJECTS.STAR_SCORE) * state.combo;
-        const finalPoints = Math.round(basePoints * precisionMult);
-        state.score += finalPoints;
-        updateScore();
-        updateCombo();
-
-        // Show floating precision score
-        if (settings.scorePopups) {
-          showPrecisionFloat(objCenterX, obj.y, finalPoints, precision);
+        if (obj.isGhost) {
+          onGhostCaught(obj);
+        } else {
+          onLiveCaught(obj);
         }
-
-        AudioManager.play(
-          (obj.isChroma ? CONFIG.AUDIO.CHROMA_BASE_HZ : CONFIG.AUDIO.CATCH_BASE_HZ) + state.combo * 20,
-          'square', 0.1
-        );
-        createExplosion(obj.x, obj.y, obj.isChroma ? '#fff' : obj.color);
-        impactEffect();
-        const wasChroma = obj.isChroma;
         releaseObject(poolIdx);
-        if (wasChroma) triggerMilestone();
         continue;
       }
 
       // Fell off bottom
       if (obj.y > containerH) {
-        if (!obj.isChroma) {
-          state.lives--;
-          state.combo = 0;
-          updateLives();
-          updateCombo();
-          AudioManager.play(CONFIG.AUDIO.MISS_HZ, 'sawtooth', 0.3, 0.2);
-          DOM.container.classList.add('shake');
-          setTimeout(() => DOM.container.classList.remove('shake'), 300);
-          if (state.lives <= 0) gameOverTriggered = true;
-        } else {
-          state.combo = 0;
-          updateCombo();
+        if (obj.isGhost) {
+          onGhostLanded(obj);
+        } else if (onLiveMissed(obj)) {
+          gameOverTriggered = true;
         }
         releaseObject(poolIdx);
         continue;
@@ -684,107 +975,463 @@ window.addEventListener('load', () => {
     }
   }
 
-  // ─── 9. SPAWN SCHEDULING ───────────────────────────────────────────────
+  // ─── 9. STAGE DIRECTOR ─────────────────────────────────────────────────
+  //
+  // The old model was one recursive setTimeout spawning random stars forever,
+  // with difficulty climbing off score and combo. v3 replaces it with an
+  // explicit phase machine over a pre-built StageDef:
+  //
+  //   intro  →  ghost  →  interlude  →  live  →  clearing  →  draft  →  intro…
+  //
+  // Every stage is authored before a single star drops, which is what makes
+  // the ghost pass possible: the preview and the real thing are literally the
+  // same data played twice.
 
-  function spawnObject() {
-    if (!state.active || state.paused || state.countingDown) return;
+  const stage = {
+    num:         0,      // 1-based stage number
+    def:         null,   // StageDef from StageGen.build()
+    phase:       'idle', // idle | intro | ghost | interlude | live | clearing | draft
+    frameIdx:    0,      // index of the next frame to fire
+    starsTotal:  0,      // real stars in this stage (after ECHO injection)
+    ghostShown:  0,      // ghost stars released so far this pass
+    resolved:    0,      // real stars caught or missed
+    caught:      0,
+    missed:      0,
+    ghostCatches: 0,
+    shields:     0,
+    bonusPicks:  0,      // extra draft picks banked from Chroma catches
+    pendingPicks: 0,
+    scoreAtStart: 0,
+  };
 
+  // ── Pause-aware timer ────────────────────────────────────────────────────
+  // Everything the director schedules goes through this one timer so that a
+  // pause freezes the stage exactly where it is and a resume continues from
+  // the same point rather than restarting the frame.
+
+  let _stTimer = null, _stFn = null, _stDueAt = 0, _stRemain = 0;
+
+  function stSchedule(fn, ms) {
+    if (_stTimer) { clearTimeout(_stTimer); _stTimer = null; }
+    _stFn    = fn;
+    _stDueAt = performance.now() + ms;
+    _stTimer = setTimeout(() => {
+      _stTimer = null;
+      _stFn    = null;
+      fn();
+    }, ms);
+  }
+
+  function stPause() {
+    if (!_stTimer) { _stRemain = 0; return; }
+    _stRemain = Math.max(0, _stDueAt - performance.now());
+    clearTimeout(_stTimer);
+    _stTimer = null;
+  }
+
+  function stResume() {
+    if (!_stFn) return;
+    stSchedule(_stFn, _stRemain > 0 ? _stRemain : 16);
+  }
+
+  function stCancel() {
+    if (_stTimer) clearTimeout(_stTimer);
+    _stTimer = null;
+    _stFn    = null;
+    _stRemain = 0;
+  }
+
+  // ── ECHO perk: inject mirrored twins into the authored stage ─────────────
+  //
+  // Done here, before either pass runs, so the ghost preview stays perfectly
+  // truthful — the twins appear in the rehearsal exactly as they will live.
+
+  function applyEchoPerk(def) {
+    const every = Upgrades.mods.echoEvery;
+    if (!every) return def;
+    let n = 0;
+    for (const frame of def.frames) {
+      const twins = [];
+      for (const s of frame.stars) {
+        if (s.isChroma || s.isEcho) continue;
+        n++;
+        if (n % every === 0) {
+          twins.push({
+            nx:       1 - s.nx,
+            ghostNx:  1 - s.ghostNx,
+            lying:    s.lying,
+            isChroma: false,
+            isEcho:   true,
+            hue:      (s.hue + 180) % 360,
+          });
+        }
+      }
+      frame.stars.push(...twins);
+    }
+    def.starCount = def.frames.reduce((a, f) => a + f.stars.length, 0);
+    return def;
+  }
+
+  // ── Spawning ─────────────────────────────────────────────────────────────
+
+  /**
+   * Put one star on screen.
+   * @param {number} nx      normalised centre x (0..1)
+   * @param {object} starDef StarDef from the StageDef
+   * @param {boolean} isGhost
+   */
+  function spawnStar(nx, starDef, isGhost) {
     const obj = acquireObject();
-    if (!obj) return;   // pool exhausted, skip this spawn
+    if (!obj) return false;          // pool exhausted — extremely unlikely at 72
 
-    const isChroma = Math.random() < CONFIG.OBJECTS.CHROMA_CHANCE;
-    const size   = isChroma ? CONFIG.OBJECTS.CHROMA_SIZE : CONFIG.OBJECTS.STAR_SIZE;
-    const x      = Math.random() * (layout.containerW - size);
-    const color  = isChroma ? 'transparent' : `hsl(${Math.random() * 360},80%,60%)`;
-    const diff   = state.cachedDifficulty;
-    const speed  = CONFIG.OBJECTS.BASE_SPEED + CONFIG.DIFFICULTY.SPEED_EXTRA * diff;
+    const size   = starDef.isChroma ? CONFIG.OBJECTS.CHROMA_SIZE : CONFIG.OBJECTS.STAR_SIZE;
+    const centre = nx * layout.containerW;
+    const x      = Math.max(0, Math.min(layout.containerW - size, centre - size / 2));
+    const color  = starDef.isChroma ? 'transparent' : `hsl(${starDef.hue},80%,60%)`;
+    const speed  = stage.def.speed * (isGhost ? Upgrades.ghostTimeScale() : 1);
 
-    obj.x      = x;
-    obj.y      = -50;
-    obj.speed  = speed;
-    obj.size   = size;
-    obj.isChroma = isChroma;
-    obj.color  = color;
+    obj.x        = x;
+    obj.y        = -50;
+    obj.speed    = speed;
+    obj.size     = size;
+    obj.isChroma = !!starDef.isChroma;
+    obj.isGhost  = !!isGhost;
+    obj.isEcho   = !!starDef.isEcho;
+    obj.lying    = !!starDef.lying;
+    obj.color    = color;
 
     const el = obj.el;
     el.style.left       = x + 'px';
     el.style.top        = '-50px';
     el.style.width      = size + 'px';
     el.style.height     = size + 'px';
-    el.style.background = color;
-    el.style.boxShadow  = '0 0 10px ' + color;
-    el.style.clipPath   = isChroma ? 'polygon(50% 0%,100% 50%,50% 100%,0% 50%)' : '';
+    el.style.clipPath   = starDef.isChroma ? 'polygon(50% 0%,100% 50%,50% 100%,0% 50%)' : '';
     el.style.display    = 'block';
 
-    if (isChroma) el.classList.add('rainbow');
+    if (isGhost) {
+      // Ghosts are deliberately washed out and outlined — never mistakable
+      // for a live star, even at a glance.
+      el.classList.add('ghost-obj');
+      el.style.opacity    = Upgrades.ghostOpacity();
+      el.style.background = starDef.isChroma ? '#ffffff' : color;
+      el.style.boxShadow  = '0 0 8px ' + (starDef.isChroma ? '#ffffff' : color);
+      if (starDef.isChroma) el.classList.add('ghost-chroma');
+      stage.ghostShown++;
+    } else {
+      el.style.opacity    = '1';
+      el.style.background = color;
+      el.style.boxShadow  = '0 0 10px ' + color;
+      if (starDef.isChroma) el.classList.add('rainbow');
+    }
+    return true;
+  }
+
+  /** Fire every star in one frame. */
+  function spawnFrame(frame, isGhost) {
+    for (const s of frame.stars) {
+      spawnStar(isGhost ? s.ghostNx : s.nx, s, isGhost);
+    }
   }
 
   /**
-   * v2.2 — Spawn scheduling uses cached difficulty for interval calc.
+   * DISTORTION hook: a phantom frame shows a brief floor marker during the
+   * ghost pass but drops no ghost star. Dormant unless
+   * CONFIG.DISTORTION.START_STAGE is set above zero.
    */
-  function scheduleSpawn() {
-    if (!state.active || state.paused || state.countingDown) return;
-    spawnObject();
-    const diff     = state.cachedDifficulty;
-    const range    = CONFIG.GAME.BASE_SPAWN_MS - CONFIG.GAME.MIN_SPAWN_MS;
-    const interval = CONFIG.GAME.MIN_SPAWN_MS + range * (1 - diff);
-    state.spawnTimer = setTimeout(scheduleSpawn, interval);
+  function telegraphPhantom(frame) {
+    for (const s of frame.stars) {
+      dropGhostMarker(s.ghostNx * layout.containerW, false);
+    }
+    AudioManager.play(CONFIG.GHOST.LAND_HZ * 0.75, 'sine', 0.06, 0.03);
   }
 
-  function stopSpawning() {
-    clearTimeout(state.spawnTimer);
-    state.spawnTimer = null;
+  // ── Phase machine ────────────────────────────────────────────────────────
+
+  function beginStage(n) {
+    if (!state.active) return;
+
+    stage.num          = n;
+    stage.def          = applyEchoPerk(StageGen.build(n, Upgrades.mods));
+    stage.phase        = 'intro';
+    stage.frameIdx     = 0;
+    stage.starsTotal   = stage.def.starCount;
+    stage.ghostShown   = 0;
+    stage.resolved     = 0;
+    stage.caught       = 0;
+    stage.missed       = 0;
+    stage.ghostCatches = 0;
+    stage.shields      = Upgrades.mods.shieldsPerStage;
+    stage.bonusPicks   = 0;
+    stage.scoreAtStart = state.score;
+
+    state.cachedDifficulty = stage.def.difficulty;
+
+    clearGhostMarkers();
+    releaseAllObjects();
+    hideStagePanels();
+    updateStageHUD();
+
+    AudioManager.play(CONFIG.AUDIO.STAGE_START_HZ, 'triangle', 0.35, 0.13);
+    showBanner('STAGE ' + n, stageBlurb(stage.def), CONFIG.STAGE.INTRO_MS, 'banner-stage');
+
+    stSchedule(() => {
+      if (CONFIG.GHOST.ENABLED) startPass('ghost');
+      else                      startPass('live');
+    }, CONFIG.STAGE.INTRO_MS);
   }
 
-  // ─── 10. MILESTONE / UPGRADES ────────────────────────────────────────────────
-
-  function triggerMilestone() {
-    AudioManager.play(CONFIG.AUDIO.MILESTONE_HZ, 'square', 0.5, 0.15);
-    state.milestoneJustEnded = true;   // v2.1: flag for post-milestone grace
-    pauseGame(/* showMenu= */ false);
-    DOM.milestoneMenu.style.display = 'block';
+  /** One-line flavour under the stage banner — tells you what's coming. */
+  function stageBlurb(def) {
+    const bits = [def.starCount + ' STARS'];
+    if (def.frames.some(f => f.stars.length > 1)) bits.push('VOLLEYS');
+    if (def.frames.some(f => f.stars.some(s => s.isChroma))) bits.push('CHROMA');
+    if (def.hasPhantoms || def.hasLies) bits.push('SIGNAL UNSTABLE');
+    return bits.join('  ·  ');
   }
 
-  DOM.discoveryBtn.addEventListener('click', () => {
-    AudioManager.play(CONFIG.AUDIO.GO_HZ, 'sine', 0.3);
-    setPaddleWidth(CONFIG.PADDLE.EXPANDED_WIDTH);
-    state.paddleExpanded = true;
-    startCountdown();
+  function startPass(kind) {
+    if (!state.active) return;
+    stage.phase    = kind;
+    stage.frameIdx = 0;
+
+    if (kind === 'ghost') {
+      stage.ghostShown = 0;
+      showBanner('GHOST PASS', 'Watch where they land. Nothing counts yet.',
+                 1200, 'banner-ghost');
+      DOM.container.classList.add('ghost-phase');
+    } else {
+      stage.resolved = 0;
+      DOM.container.classList.remove('ghost-phase');
+      showBanner('GO', '', 650, 'banner-go');
+      AudioManager.play(CONFIG.AUDIO.GO_HZ, 'sine', 0.2);
+    }
+
+    updateStageHUD();
+    nextFrame();
+  }
+
+  function nextFrame() {
+    if (!state.active) return;
+
+    const def     = stage.def;
+    const isGhost = stage.phase === 'ghost';
+
+    if (stage.frameIdx >= def.frames.length) {
+      waitForPassEnd();
+      return;
+    }
+
+    const frame = def.frames[stage.frameIdx++];
+
+    if (isGhost && frame.phantom) {
+      telegraphPhantom(frame);
+    } else {
+      spawnFrame(frame, isGhost);
+    }
+
+    updateStageHUD();
+
+    // The ghost pass is time-compressed by exactly the same factor its stars
+    // are sped up by, so the rhythm the player learns is the real rhythm.
+    const scale = isGhost ? Upgrades.ghostTimeScale() : 1;
+    stSchedule(nextFrame, frame.gap / scale);
+  }
+
+  /** Poll until every star from the current pass has left the screen. */
+  function waitForPassEnd() {
+    if (!state.active) return;
+    const isGhost = stage.phase === 'ghost';
+
+    if (countActive(isGhost) > 0) {
+      stSchedule(waitForPassEnd, CONFIG.STAGE.TAIL_POLL_MS);
+      return;
+    }
+
+    if (isGhost) {
+      stage.phase = 'interlude';
+      updateStageHUD();
+      if (!Upgrades.mods.keepGhostMarkers) fadeGhostMarkers();
+      showBanner('YOUR TURN', 'Same stage. This time it counts.',
+                 CONFIG.STAGE.GHOST_TO_LIVE_MS, 'banner-ready');
+      stSchedule(() => startPass('live'), CONFIG.STAGE.GHOST_TO_LIVE_MS);
+    } else {
+      endStage();
+    }
+  }
+
+  function endStage() {
+    if (!state.active) return;
+
+    stage.phase = 'clearing';
+    state.stagesCleared = stage.num;
+    fadeGhostMarkers();
+    updateStageHUD();
+
+    const M       = Upgrades.mods;
+    const perfect = stage.missed === 0;
+
+    const clearBonus   = CONFIG.SCORING.STAGE_CLEAR_BASE * stage.num;
+    const perfectBonus = perfect
+      ? (CONFIG.SCORING.PERFECT_STAGE_BONUS + M.perfectBonus) * stage.num
+      : 0;
+    // PRECOGNITION pays out here rather than per-catch, so the ghost pass
+    // itself stays completely free of score feedback.
+    const ghostBonus = M.ghostBounty * stage.ghostCatches * stage.num;
+
+    const total = Math.round((clearBonus + perfectBonus + ghostBonus) * M.scoreMult);
+    state.score += total;
+    updateScore();
+    if (perfect) state.perfectStages++;
+
+    AudioManager.play(CONFIG.AUDIO.STAGE_CLEAR_HZ, 'triangle', 0.5, 0.16);
+    showStageClear({ perfect, clearBonus, perfectBonus, ghostBonus, total });
+
+    stSchedule(openDraft, CONFIG.STAGE.CLEAR_PANEL_MS);
+  }
+
+  function showStageClear(r) {
+    hideBanner();
+    DOM.stageClearTitle.textContent = r.perfect ? 'PERFECT STAGE' : 'STAGE CLEAR';
+    DOM.stageClearTitle.className   = 'overlay-title' + (r.perfect ? ' perfect' : '');
+
+    const rows = [
+      ['STARS CAUGHT', stage.caught + ' / ' + stage.starsTotal],
+      ['MISSES',       stage.missed],
+      ['GHOSTS TOUCHED', stage.ghostCatches],
+      ['STAGE SCORE',  '+' + (state.score - stage.scoreAtStart)],
+    ];
+    if (r.perfectBonus) rows.push(['PERFECT BONUS', '+' + Math.round(r.perfectBonus * Upgrades.mods.scoreMult)]);
+    if (r.ghostBonus)   rows.push(['PRECOGNITION',  '+' + Math.round(r.ghostBonus   * Upgrades.mods.scoreMult)]);
+
+    DOM.stageClearStats.innerHTML = rows.map(([k, v]) =>
+      `<div class="sc-row"><span>${k}</span><span>${v}</span></div>`).join('');
+
+    DOM.stageClearPanel.style.display = 'block';
+  }
+
+  function hideStagePanels() {
+    DOM.stageClearPanel.style.display = 'none';
+    DOM.draftPanel.style.display      = 'none';
+  }
+
+  function stopStageDirector() {
+    stCancel();
+    stage.phase = 'idle';
+    DOM.container.classList.remove('ghost-phase');
+  }
+
+  // ─── 10. DRAFT ─────────────────────────────────────────────────────────
+  //
+  // The replayability engine. One pick per stage, plus one per Chroma caught.
+  // Perks stack, several carry real downsides, and the hand is drawn from the
+  // seeded RNG — so a seed is a genuinely reproducible run.
+
+  function openDraft() {
+    if (!state.active) return;
+    stage.phase = 'draft';
+    stage.pendingPicks = 1 + stage.bonusPicks;
+    DOM.stageClearPanel.style.display = 'none';
+    updateStageHUD();
+    dealDraftHand();
+  }
+
+  function dealDraftHand() {
+    const hand = Upgrades.rollHand(stage.num + 1);
+
+    if (!hand.length) { finishDraft(); return; }
+
+    DOM.draftTitle.textContent = 'CHOOSE AN UPGRADE';
+    const picksLeft = stage.pendingPicks;
+    DOM.draftSub.textContent =
+      (picksLeft > 1 ? picksLeft + ' PICKS REMAINING  ·  ' : '') +
+      'ENTERING STAGE ' + (stage.num + 1);
+
+    DOM.draftCards.innerHTML = hand.map(p => `
+      <button class="draft-card rarity-${p.rarity}" data-perk="${p.id}">
+        <span class="draft-icon">${p.icon}</span>
+        <span class="draft-name">${p.name}</span>
+        <span class="draft-rarity">${p.rarity.toUpperCase()}</span>
+        <span class="draft-desc">${p.desc}</span>
+        ${Upgrades.stacksOf(p.id) ? `<span class="draft-owned">OWNED x${Upgrades.stacksOf(p.id)}</span>` : ''}
+      </button>`).join('');
+
+    DOM.draftCards.querySelectorAll('.draft-card').forEach(btn => {
+      btn.addEventListener('click', () => pickPerk(btn.dataset.perk));
+    });
+
+    DOM.draftRerollBtn.textContent = 'REROLL (' + Upgrades.rerolls + ')';
+    DOM.draftRerollBtn.disabled    = Upgrades.rerolls <= 0;
+    DOM.draftPanel.style.display   = 'block';
+  }
+
+  function pickPerk(perkId) {
+    AudioManager.play(CONFIG.AUDIO.DRAFT_PICK_HZ, 'square', 0.3, 0.14);
+
+    Upgrades.take(perkId, {
+      grantLife: n => { state.lives += n; updateLives(); },
+    });
+
+    // Perks that change the paddle take effect immediately.
+    setPaddleWidth(Upgrades.paddleWidth());
+    renderPerkStrip();
+
+    stage.pendingPicks--;
+    if (stage.pendingPicks > 0) dealDraftHand();
+    else finishDraft();
+  }
+
+  function finishDraft() {
+    DOM.draftPanel.style.display = 'none';
+    beginStage(stage.num + 1);
+  }
+
+  DOM.draftRerollBtn.addEventListener('click', () => {
+    if (!Upgrades.spendReroll()) return;
+    AudioManager.play(440, 'sine', 0.15, 0.1);
+    dealDraftHand();
   });
 
-  DOM.securityBtn.addEventListener('click', () => {
-    AudioManager.play(CONFIG.AUDIO.GO_HZ, 'sine', 0.3);
-    state.lives++;
-    updateLives();
-    startCountdown();
+  DOM.draftSkipBtn.addEventListener('click', () => {
+    AudioManager.play(300, 'sine', 0.15, 0.08);
+    stage.pendingPicks--;
+    if (stage.pendingPicks > 0) dealDraftHand();
+    else finishDraft();
   });
 
   // ─── 11. PAUSE ───────────────────────────────────────────────────────────────
 
+  /** True when a menu owns the screen and gameplay input should be ignored. */
+  function inMenuPhase() {
+    return stage.phase === 'draft' || stage.phase === 'clearing';
+  }
+
   /**
-   * @param {boolean} showMenu - show the pause overlay (false during milestone)
+   * @param {boolean} showMenu - show the pause overlay
    */
   function pauseGame(showMenu = true) {
-    if (!state.active) return;
+    if (!state.active || state.paused) return;
     state.paused = true;
-    stopSpawning();
+    stPause();
     stopGameBG();
     if (showMenu) DOM.pauseMenu.style.display = 'block';
   }
 
   function resumeGame() {
-    DOM.pauseMenu.style.display  = 'none';
-    DOM.milestoneMenu.style.display = 'none';
-    state.paused = false;
+    if (!state.active) return;
+    DOM.pauseMenu.style.display = 'none';
     startGameBG();
-    scheduleSpawn();
+    // A 3-2-1 before unfreezing, so nobody eats a star the instant they resume.
+    startCountdown(() => {
+      state.paused = false;
+      stResume();
+    });
   }
 
   document.addEventListener('keydown', e => {
     if (e.code !== 'Space') return;
     e.preventDefault();
     if (!state.active || state.countingDown) return;
-    if (DOM.milestoneMenu.style.display === 'block') return;
+    if (inMenuPhase()) return;
     if (DOM.settingsScreen.style.display === 'flex') return;
     if (state.paused) resumeGame();
     else pauseGame(true);
@@ -794,13 +1441,17 @@ window.addEventListener('load', () => {
 
   // ─── 12. COUNTDOWN ──────────────────────────────────────────────────────────
 
-  function startCountdown() {
-    DOM.milestoneMenu.style.display = 'none';
-    DOM.countdown.style.display     = 'block';
+  /**
+   * 3-2-1-GO overlay. Runs on real timers (not the director timer) and calls
+   * `onDone` when it finishes.
+   */
+  function startCountdown(onDone) {
+    DOM.countdown.style.display = 'block';
     state.countingDown = true;
     let count = 3;
 
     function tick() {
+      if (!state.active) { DOM.countdown.style.display = 'none'; state.countingDown = false; return; }
       if (count > 0) {
         AudioManager.play(CONFIG.AUDIO.COUNTDOWN_HZ[3 - count], 'sine', 0.1);
         DOM.countdown.innerText = count;
@@ -809,25 +1460,8 @@ window.addEventListener('load', () => {
       } else {
         AudioManager.play(CONFIG.AUDIO.GO_HZ, 'sine', 0.2);
         DOM.countdown.style.display = 'none';
-        state.paused       = false;
         state.countingDown = false;
-
-        if (state.paddleExpanded) {
-          state.discoveryTimer = setTimeout(() => {
-            setPaddleWidth(CONFIG.PADDLE.BASE_WIDTH);
-            state.paddleExpanded = false;
-          }, CONFIG.PADDLE.DISCOVERY_DURATION_MS);
-        }
-
-        startGameBG();
-        // v2.1: after a milestone, delay first spawn so objects don't
-        // land immediately on top of the player.
-        if (state.milestoneJustEnded) {
-          state.milestoneJustEnded = false;
-          state.spawnTimer = setTimeout(scheduleSpawn, CONFIG.DIFFICULTY.MILESTONE_GRACE_MS);
-        } else {
-          scheduleSpawn();
-        }
+        if (onDone) onDone();
       }
     }
 
@@ -838,10 +1472,13 @@ window.addEventListener('load', () => {
 
   async function triggerGameOver() {
     state.active = false;
-    stopSpawning();
+    stopStageDirector();
     stopGameLoop();
     releaseAllObjects();
     releaseAllParticles();
+    clearGhostMarkers();
+    hideBanner();
+    hideStagePanels();
     DOM.precisionFloatPool.innerHTML = '';
     stopGameBG();
     stopMusic();
@@ -852,6 +1489,20 @@ window.addEventListener('load', () => {
     DOM.finalScore.innerText = 'SCORE: '      + state.score;
     DOM.highScore.innerText  = 'BEST SCORE: ' + state.bestScore;
     DOM.maxCombo.innerText   = 'BEST COMBO: x' + state.sessionMaxCombo;
+
+    // v3 — run summary: the "one more run" hook. Reaching a deeper stage is
+    // a cleaner brag than raw score, and the seed makes the run repeatable.
+    const reached = Math.max(1, stage.num);
+    const perkList = Upgrades.ownedSummary();
+    DOM.runSummary.innerHTML = `
+      <div class="rs-row"><span>STAGE REACHED</span><span>${reached}</span></div>
+      <div class="rs-row"><span>STAGES CLEARED</span><span>${state.stagesCleared}</span></div>
+      <div class="rs-row"><span>PERFECT STAGES</span><span>${state.perfectStages}</span></div>
+      <div class="rs-row"><span>GHOSTS TOUCHED</span><span>${state.totalGhostCatches}</span></div>
+      <div class="rs-row"><span>SEED</span><span class="rs-seed">${state.runSeedCode}</span></div>
+      ${perkList.length ? `<div class="rs-perks">${perkList.map(p =>
+        `<span class="perk-chip rarity-${p.rarity}" title="${p.name} — ${p.desc}">${p.icon}${p.stacks > 1 ? '<b>x' + p.stacks + '</b>' : ''}</span>`
+      ).join('')}</div>` : ''}`;
 
     if (await Leaderboard.qualifies(state.score, state.sessionMaxCombo)) {
       DOM.nameEntry.style.display = 'block';
@@ -999,8 +1650,23 @@ window.addEventListener('load', () => {
       title: 'CHROMA',
       titleColor: '#ffcc00',
       body: `<p>Rare <span style="color:#ffcc00;font-weight:bold;">Chroma</span> gems appear occasionally — shimmering rainbow diamonds.</p>
-             <p>Catch one to trigger a <span style="color:var(--magenta);font-weight:bold;">LEVEL UP</span> — choose between an expanded paddle or an extra life.</p>
+             <p>Catching one banks an <span style="color:var(--magenta);font-weight:bold;">extra upgrade pick</span> for the end of the stage. It never interrupts the run.</p>
              <p style="margin-top:12px;color:rgba(255,255,255,0.5);font-size:13px;">Missing a Chroma won't cost a life, but it resets your combo.</p>`,
+    },
+    {
+      title: 'THE GHOST PASS',
+      titleColor: 'rgba(160,220,255,0.95)',
+      body: `<p>Every stage plays <span style="color:#9fd8ff;font-weight:bold;">twice</span>.</p>
+             <p>First comes the <span style="color:#9fd8ff;font-weight:bold;">ghost pass</span> — a faded, sped-up rehearsal showing exactly where every star will fall.</p>
+             <p>Ghost stars are <span style="font-weight:bold;">information only</span>. Catching them scores nothing. Missing them costs nothing. Use them to learn the shape.</p>
+             <p style="margin-top:12px;color:rgba(255,255,255,0.5);font-size:13px;">Then the same stage runs for real — and this time it counts.</p>`,
+    },
+    {
+      title: 'BUILD YOUR RUN',
+      titleColor: 'var(--magenta)',
+      body: `<p>Clear a stage and you <span style="color:var(--magenta);font-weight:bold;">draft an upgrade</span> from three random options.</p>
+             <p>They stack. Some have real downsides. A wider paddle scores less; a hairline paddle scores far more.</p>
+             <p style="margin-top:12px;color:rgba(255,255,255,0.5);font-size:13px;">Stages get longer and tighter as you go — but only with the stage number, never because you're doing well.</p>`,
     },
     {
       title: 'READY FOR LAUNCH',
@@ -1070,6 +1736,11 @@ window.addEventListener('load', () => {
   function startGame() {
     AudioManager.resume();
 
+    // v3 — an entered seed reproduces a run exactly: same stage layouts,
+    // same draft hands. Blank means "surprise me".
+    const raw = (DOM.seedInput.value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    state.forcedSeed = raw ? RNG.seed(raw) : 0;
+
     // First-time tutorial check — show tutorial before launching
     if (isFirstTimePlaying()) {
       TitleBG.stop();
@@ -1107,7 +1778,6 @@ window.addEventListener('load', () => {
     DOM.lbScreen.style.display       = 'none';
     DOM.settingsScreen.style.display = 'none';
     DOM.gameOver.style.display       = 'none';
-    DOM.milestoneMenu.style.display  = 'none';
     DOM.countdown.style.display      = 'none';
     DOM.nameEntry.style.display      = 'none';
     DOM.viewLbBtn.style.display      = 'none';
@@ -1115,9 +1785,14 @@ window.addEventListener('load', () => {
     DOM.container.style.display      = 'block';
 
     // Reset timers
-    stopSpawning();
+    stopStageDirector();
     stopGameBG();
     clearTimeout(state.discoveryTimer);
+
+    // v3 — a fresh, reproducible seed drives stage layout AND draft hands.
+    const seed = (typeof state.forcedSeed === 'number' && state.forcedSeed)
+      ? RNG.seed(state.forcedSeed)
+      : RNG.reseed();
 
     // Reset state
     Object.assign(state, {
@@ -1129,12 +1804,20 @@ window.addEventListener('load', () => {
       paused:          false,
       countingDown:    false,
       paddleExpanded:      false,
-      milestoneJustEnded:  false,
       discoveryTimer:      null,
+      stagesCleared:       0,
+      totalGhostCatches:   0,
+      totalMisses:         0,
+      perfectStages:       0,
+      runSeed:             seed,
+      runSeedCode:         RNG.seedCode(),
     });
 
+    // v3 — wipe the build from the previous run.
+    Upgrades.reset();
+
     // Reset UI
-    setPaddleWidth(CONFIG.PADDLE.BASE_WIDTH);
+    setPaddleWidth(Upgrades.paddleWidth());
     DOM.paddleWrap.style.left = '50%';
     DOM.comboEl.style.opacity = '0';
     updateScore();
@@ -1143,15 +1826,31 @@ window.addEventListener('load', () => {
     // v2.2: initialise pools + layout cache
     updateLayout();
     paddleState.x = layout.containerW / 2;
-    paddleState.width = CONFIG.PADDLE.BASE_WIDTH;
+    paddleState.width = Upgrades.paddleWidth();
     initObjectPool();
     initParticlePool();
+    initMarkerPool();
     DOM.precisionFloatPool.innerHTML = '';  // clear any lingering float text
+
+    // v3 — stage HUD reset
+    Object.assign(stage, {
+      num: 0, def: null, phase: 'idle', frameIdx: 0,
+      starsTotal: 0, ghostShown: 0, resolved: 0, caught: 0, missed: 0,
+      ghostCatches: 0, shields: 0, bonusPicks: 0, pendingPicks: 0,
+      scoreAtStart: 0,
+    });
+    hideStagePanels();
+    hideBanner();
+    renderPerkStrip();
+    updateStageHUD();
+    DOM.seedLabel.textContent = 'SEED ' + state.runSeedCode;
 
     startGameBG();
     startGameLoop();
-    scheduleSpawn();
     startMusic();
+
+    // v3 — the run begins with stage 1's ghost pass, not a spawn stream.
+    beginStage(1);
   }
 
   DOM.startGameBtn.addEventListener('click', startGame);
@@ -1421,5 +2120,17 @@ window.addEventListener('load', () => {
   );
 
   StarCursor.enable();   // start on title screen
+
+  // ─── 20. DEBUG HANDLE ───────────────────────────────────────────────────
+  // Read/write access to live state from the browser console, for balancing.
+  // e.g.  SC.stage.def.frames.length   ·   SC.jumpToStage(12)
+  window.SC = {
+    state, stage, layout, paddleState, objectPool, activeObjects,
+    CONFIG, Upgrades, StageGen, RNG,
+    jumpToStage: n => { stCancel(); releaseAllObjects(); beginStage(n); },
+    grantPerk:   id => { Upgrades.take(id, { grantLife: n => { state.lives += n; updateLives(); } });
+                         setPaddleWidth(Upgrades.paddleWidth()); renderPerkStrip(); },
+    pauseGame, resumeGame,
+  };
 
 }); // end window load
