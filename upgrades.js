@@ -280,6 +280,33 @@ const Upgrades = (() => {
     rerolls = CONFIG.DRAFT.REROLLS_PER_RUN;
   }
 
+  // ─── RUNTIME REGISTRATION (v3.2) ──────────────────────────────────────────
+  //
+  // Two small seams the dev console needs and nothing else uses. They are
+  // here rather than in devtools.js so that poking at the pool is a supported
+  // operation with one owner, instead of another module reaching in and
+  // mutating POOL and BY_ID behind this module's back.
+
+  /**
+   * Add a perk to the live pool, or replace one that already has this id.
+   * Replacing in place matters for prototyping: editing a perk and running it
+   * again should give you one perk, not three generations of it in the draft.
+   */
+  function register(def) {
+    if (!def || !def.id) return null;
+    const i = POOL.findIndex(p => p.id === def.id);
+    if (i >= 0) POOL[i] = def;
+    else        POOL.push(def);
+    BY_ID[def.id] = def;
+    return def;
+  }
+
+  /** Set the remaining reroll count directly. */
+  function setRerolls(n) {
+    rerolls = Math.max(0, n | 0);
+    return rerolls;
+  }
+
   reset();
 
   return {
@@ -288,6 +315,8 @@ const Upgrades = (() => {
     get rerolls() { return rerolls; },
     spendReroll() { if (rerolls > 0) { rerolls--; return true; } return false; },
     reset,
+    register,
+    setRerolls,
     rollHand,
     take,
     stacksOf,

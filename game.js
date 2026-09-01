@@ -44,6 +44,28 @@
 
 window.addEventListener('load', () => {
 
+  // ─── 0. DEV BRIDGE ──────────────────────────────────────────────────────────
+  //
+  // devtools.js is optional. When its script tag is present it installs
+  // window.DevTools and the handful of `Dev.*` calls scattered below light up;
+  // when it is absent this neutral stand-in takes over and every one of them
+  // becomes a no-op returning the ordinary value. Nothing in the shipping game
+  // depends on dev mode existing.
+
+  const Dev = window.DevTools || {
+    enabled: false,
+    timeScale:   () => 1,
+    godMode:     () => false,
+    tainted:     () => false,
+    consumeStep: () => false,
+    startStage:  n => n,
+    forcedHand:  () => null,
+    onFrame() {}, onRunStart() {}, onStageBegin() {}, onStageEnd() {},
+    onCatch() {}, onMiss() {}, onGameOver() {},
+    attach() {}, taint() {},
+    whoami() { console.log('[Dev] devtools.js is not loaded.'); return null; },
+  };
+
   // ─── 1. DOM REFERENCES ──────────────────────────────────────────────────────
 
   const DOM = {
@@ -858,6 +880,10 @@ window.addEventListener('load', () => {
       showToast('CHROMA — EXTRA PICK', 'toast-chroma');
     }
     updateStageHUD();
+
+    // Lets a dev-console prototype react to a catch without needing its
+    // mechanic written into this file first.
+    Dev.onCatch({ obj, points: finalPoints, precision, isChroma: !!obj.isChroma });
   }
 
   /**
@@ -889,10 +915,13 @@ window.addEventListener('load', () => {
     }
 
     state.combo = 0;
-    state.lives -= M.missLifeCost;
+    // God mode keeps the feedback — the shake, the sound, the broken combo —
+    // and only stops the life draining away, so a stage still reads honestly.
+    if (!Dev.godMode()) state.lives -= M.missLifeCost;
     updateLives();
     updateCombo();
     updateStageHUD();
+    Dev.onMiss({ obj, isChroma: !!obj.isChroma });
     AudioManager.play(CONFIG.AUDIO.MISS_HZ, 'sawtooth', 0.3, 0.2);
     DOM.container.classList.add('shake');
     setTimeout(() => DOM.container.classList.remove('shake'), 300);
@@ -913,15 +942,22 @@ window.addEventListener('load', () => {
 
   function gameLoop() {
     if (!state.active) return;
-    if (state.paused) {
+    // A frozen game still ticks the loop so a dev "step" can push exactly one
+    // frame through; consumeStep() is false for everyone else.
+    if (state.paused && !Dev.consumeStep()) {
       state.gameLoopRaf = requestAnimationFrame(gameLoop);
       return;
     }
+
+    // Dev hooks that move the paddle (autoplay) run first, so the collision
+    // box below is built from this frame's position rather than last frame's.
+    Dev.onFrame();
 
     // ── Per-frame caches ──
     state.cachedDifficulty = computeDifficulty();
     const pRect      = getPaddleRect();
     const containerH = layout.containerH;
+    const timeScale  = Dev.timeScale();   // 1 unless dev mode says otherwise
 
     // ── Update falling objects ──
     let gameOverTriggered = false;
@@ -929,7 +965,7 @@ window.addEventListener('load', () => {
       const poolIdx = activeObjects[i];
       const obj = objectPool[poolIdx];
 
-      obj.y += obj.speed;
+      obj.y += obj.speed * timeScale;
       obj.el.style.top = obj.y + 'px';
 
       // Collision: AABB from JS-tracked positions (zero reflows)
@@ -1023,13 +1059,17 @@ window.addEventListener('load', () => {
 
   function stSchedule(fn, ms) {
     if (_stTimer) { clearTimeout(_stTimer); _stTimer = null; }
+    // Scaling here rather than at each call site means frame gaps, banners and
+    // tail polling all stretch or compress together, so a stage played at 4x
+    // keeps its exact rhythm. Divides by 1 for everyone but a developer.
+    const wait = Math.max(0, ms / Dev.timeScale());
     _stFn    = fn;
-    _stDueAt = performance.now() + ms;
+    _stDueAt = performance.now() + wait;
     _stTimer = setTimeout(() => {
       _stTimer = null;
       _stFn    = null;
       fn();
-    }, ms);
+    }, wait);
   }
 
   function stPause() {
@@ -1184,6 +1224,8 @@ window.addEventListener('load', () => {
     AudioManager.play(CONFIG.AUDIO.STAGE_START_HZ, 'triangle', 0.35, 0.13);
     showBanner('STAGE ' + n, stageBlurb(stage.def), CONFIG.STAGE.INTRO_MS, 'banner-stage');
 
+    Dev.onStageBegin();
+
     stSchedule(() => {
       if (CONFIG.GHOST.ENABLED) startPass('ghost');
       else                      startPass('live');
@@ -1296,6 +1338,10 @@ window.addEventListener('load', () => {
     AudioManager.play(CONFIG.AUDIO.STAGE_CLEAR_HZ, 'triangle', 0.5, 0.16);
     showStageClear({ perfect, clearBonus, perfectBonus, ghostBonus, total });
 
+    // Appends a row to the dev run log and fires any prototype's onStageEnd.
+    // Runs after scoring so the hook sees the finished numbers.
+    Dev.onStageEnd({ perfect, clearBonus, perfectBonus, ghostBonus, total });
+
     stSchedule(openDraft, CONFIG.STAGE.CLEAR_PANEL_MS);
   }
 
@@ -1346,7 +1392,9 @@ window.addEventListener('load', () => {
   }
 
   function dealDraftHand() {
-    const hand = Upgrades.rollHand(stage.num + 1);
+    // A dev-forced hand takes the place of the roll exactly once; forcedHand()
+    // is null for every normal player and clears itself after it is dealt.
+    const hand = Dev.forcedHand() || Upgrades.rollHand(stage.num + 1);
 
     if (!hand.length) { finishDraft(); return; }
 
@@ -1439,6 +1487,12 @@ window.addEventListener('load', () => {
 
   document.addEventListener('keydown', e => {
     if (e.code !== 'Space') return;
+    // A space typed into a text field is a space, not a pause. Without this
+    // the seed box swallows spaces and the dev console's code editor pauses
+    // the game every time you hit the spacebar.
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' ||
+              t.tagName === 'SELECT' || t.isContentEditable)) return;
     e.preventDefault();
     if (!state.active || state.countingDown) return;
     if (inMenuPhase()) return;
@@ -1514,7 +1568,16 @@ window.addEventListener('load', () => {
         `<span class="perk-chip rarity-${p.rarity}" title="${p.name} — ${p.desc}">${p.icon}${p.stacks > 1 ? '<b>x' + p.stacks + '</b>' : ''}</span>`
       ).join('')}</div>` : ''}`;
 
-    if (await Leaderboard.qualifies(state.score, state.sessionMaxCombo)) {
+    Dev.onGameOver();
+
+    // v3.2 — a run that dev mode touched never gets offered to the board, no
+    // matter how good the number looks. An untouched run from a dev account
+    // still posts normally.
+    if (Dev.tainted()) {
+      DOM.nameEntry.style.display = 'none';
+      DOM.runSummary.insertAdjacentHTML('beforeend',
+        '<div class="dv-tainted-note">DEV RUN — NOT ELIGIBLE FOR THE BOARD</div>');
+    } else if (await Leaderboard.qualifies(state.score, state.sessionMaxCombo)) {
       showNameEntry();
     } else {
       DOM.nameEntry.style.display = 'none';
@@ -1553,6 +1616,15 @@ window.addEventListener('load', () => {
   }
 
   async function submitRun(name) {
+    // Belt and braces: the panel above is already hidden for a tainted run,
+    // but this is the only door to the board and it should be the thing that
+    // is actually locked.
+    if (Dev.tainted()) {
+      DOM.submitStatus.className   = 'submit-status is-error';
+      DOM.submitStatus.textContent = 'DEV RUN — NOT ELIGIBLE';
+      return;
+    }
+
     DOM.submitScoreBtn.disabled     = true;
     DOM.submitScoreUserBtn.disabled = true;
     DOM.submitStatus.className      = 'submit-status';
@@ -1903,6 +1975,10 @@ window.addEventListener('load', () => {
     // v3 — wipe the build from the previous run.
     Upgrades.reset();
 
+    // v3.2 — a fresh run is "clean" until dev mode touches it. This is also
+    // where a preset build from a restored scenario gets applied.
+    Dev.onRunStart();
+
     // Reset UI
     setPaddleWidth(Upgrades.paddleWidth());
     DOM.paddleWrap.style.left = '50%';
@@ -1937,7 +2013,9 @@ window.addEventListener('load', () => {
     startMusic();
 
     // v3 — the run begins with stage 1's ghost pass, not a spawn stream.
-    beginStage(1);
+    // startStage() returns 1 for everyone except a developer who asked to
+    // open somewhere else.
+    beginStage(Dev.startStage(1));
   }
 
   DOM.startGameBtn.addEventListener('click', startGame);
@@ -2253,19 +2331,89 @@ window.addEventListener('load', () => {
 
   StarCursor.enable();   // start on title screen
 
-  // ─── 20. DEBUG HANDLE ───────────────────────────────────────────────────
-  // Read/write access to live state from the browser console, for balancing.
-  // e.g.  SC.stage.def.frames.length   ·   SC.jumpToStage(12)
-  window.SC = {
-    state, stage, layout, paddleState, objectPool, activeObjects,
+  // ─── 20. DEBUG HANDLE + DEV BRIDGE ──────────────────────────────────────
+  //
+  // `SC` is the console handle: read/write access to live state for quick
+  // balancing pokes. Everything the dev console needs is exposed here too, so
+  // there is exactly one surface to keep in sync rather than two.
+
+  /** The ctx an upgrade's `instant` effect expects. */
+  function perkCtx() {
+    return { grantLife: n => { state.lives += n; updateLives(); } };
+  }
+
+  /** Cut the current stage short and award it as cleared. */
+  function forceEndStage() {
+    if (!state.active) return;
+    stCancel();
+    releaseAllObjects();
+    endStage();
+  }
+
+  /** Abandon the ghost pass and go straight to the live one. */
+  function skipGhostPass() {
+    if (!state.active || stage.phase !== 'ghost') return;
+    stCancel();
+    releaseAllObjects();
+    fadeGhostMarkers();
+    startPass('live');
+  }
+
+  /** Open a draft without having to finish a stage for it. */
+  function forceDraft() {
+    if (!state.active) return;
+    stCancel();
+    releaseAllObjects();
+    hideBanner();
+    openDraft();
+  }
+
+  const SC = {
+    // Live state
+    state, stage, layout, paddleState, objectPool, activeObjects, settings, DOM,
     CONFIG, Upgrades, StageGen, RNG,
-    jumpToStage: n => { stCancel(); releaseAllObjects(); beginStage(n); },
-    grantPerk:   id => { Upgrades.take(id, { grantLife: n => { state.lives += n; updateLives(); } });
-                         setPaddleWidth(Upgrades.paddleWidth()); renderPerkStrip(); },
-    pauseGame, resumeGame,
-    // v3.1
+
+    // Modules
     Auth, AccountUI, Leaderboard,
+
+    // UI refresh
+    updateScore, updateLives, updateCombo, updateStageHUD, renderPerkStrip,
+    setPaddleWidth,
+    setPaddleLeft: x => { DOM.paddleWrap.style.left = x + 'px'; },
+    showBanner, showToast, hideBanner,
+
+    // Flow control
+    jumpToStage: n => { stCancel(); releaseAllObjects(); beginStage(n); },
+    rebuildStage: () => { stCancel(); releaseAllObjects(); beginStage(Math.max(1, stage.num || 1)); },
+    forceEndStage, skipGhostPass, forceDraft,
+    beginStage, startPass, triggerGameOver,
+    pauseGame, resumeGame, stResume, startGameBG,
+
+    // Run control
+    launchRun: _launchGame,
+    getSeedInput: () => DOM.seedInput.value || '',
+    setSeedInput: v => { DOM.seedInput.value = v || ''; },
+
+    // Perks
+    perkCtx,
+    grantPerk: id => {
+      Upgrades.take(id, perkCtx());
+      setPaddleWidth(Upgrades.paddleWidth());
+      renderPerkStrip();
+    },
+
+    // v3.1
     showNameEntry, renderLeaderboard,
   };
+
+  window.SC = SC;
+
+  // Hand the internals to the dev console, if it is loaded. `whoami()` is
+  // pulled up onto SC so you can find your admin id without opening anything.
+  Dev.attach(SC);
+  if (Dev.enabled || window.DevTools) {
+    SC.dev    = Dev;
+    SC.whoami = () => Dev.whoami();
+  }
 
 }); // end window load

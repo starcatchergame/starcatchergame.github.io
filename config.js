@@ -210,4 +210,28 @@ const CONFIG = Object.freeze({
     HOVER_DELAY_MS:    1000,
   },
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // v3.2 — DEV MODE
+  // Controls who gets the dev console (devtools.js). Everyone else sees a
+  // completely ordinary game: no toolbar, no hotkeys, no stored state.
+  //
+  // To fill in ADMINS: sign in with the account you want to develop from,
+  // open the browser console and run  SC.whoami()  — it prints the exact
+  // string to paste here.
+  //
+  // This is a convenience gate, not a security boundary. It lives in the
+  // browser, so it keeps the tools out of players' way rather than out of a
+  // determined person's reach. The consequence that actually matters — a
+  // doctored run reaching the leaderboard — is blocked separately by the
+  // "tainted run" flag, and belongs in a server-side check long-term.
+  // ─────────────────────────────────────────────────────────────────────────
+  DEV: {
+    // Emails or Supabase user IDs allowed to open the dev console.
+    ADMINS: [
+      'larsonkeagan@gmail.com',
+    ],
+    // Your own machine is always trusted, so local iteration needs no login.
+    ALLOW_LOCALHOST: true,
+  },
+
 });

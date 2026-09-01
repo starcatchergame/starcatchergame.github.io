@@ -5,6 +5,10 @@
   <title>Star Catcher</title>
   <link rel="icon" href="giz.ico">
   <link rel="stylesheet" href="style.css">
+
+  <!-- DEV MODE (v3.2). Delete this line and the devtools.js tag at the bottom
+       of the body to ship a build with no dev tooling in it at all. -->
+  <link rel="stylesheet" href="devtools.css">
 </head>
 <body>
 
@@ -336,6 +340,11 @@
 <script src="title-bg.js"></script>
 <script src="ratchet-cars.js"></script>
 <script src="star-cursor.js"></script>
+
+<!-- DEV MODE — must load before game.js, which reads window.DevTools once on
+     load. Removing this tag is safe: game.js falls back to a neutral stub. -->
+<script src="devtools.js"></script>
+
 <script src="game.js"></script>
 </body>
 </html>
