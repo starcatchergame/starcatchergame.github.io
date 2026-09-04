@@ -23,6 +23,30 @@ body {
      scroll. This also removes the scrollbar, which was itself quietly
      changing the playfield width by ~15px. */
   overflow: hidden;
+
+  /* v3.5 — mobile. A paddle drag is a horizontal swipe across a full-bleed
+     fixed element, which is exactly the gesture a browser reads as "scroll
+     the page" or "navigate back". None of these are reachable by a desktop
+     player, so they cost that path nothing.
+       touch-action        stops pan/pinch being synthesised from the drag
+       overscroll-behavior stops pull-to-refresh firing on a downward flick
+       tap-highlight       stops a grey box flashing over tapped buttons
+       text-size-adjust    stops iOS inflating HUD text in landscape */
+  touch-action: none;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* The playfield must never be selectable — a long press during a drag would
+   otherwise pop the text-selection callout mid-run. Menus keep normal
+   selection so scores and seed codes can still be copied. */
+#game-container {
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 /* ── App Scaler (v3.3) ───────────────────────────────────────── */
@@ -119,17 +143,22 @@ body {
   display: none;
 }
 
-body.star-cursor-active,
-body.star-cursor-active #start-screen,
-body.star-cursor-active #leaderboard-screen,
-body.star-cursor-active #settings-screen,
-body.star-cursor-active #account-screen,
-body.star-cursor-active .pilot-chip,
-body.star-cursor-active button,
-body.star-cursor-active .game-button,
-body.star-cursor-active .lb-tab,
-body.star-cursor-active input,
-body.star-cursor-active a {
+/* v3.5 — every rule in this block is scoped to .pointer-mode. On touch there
+   is no cursor to hide and StarCursor is never enabled, but the class could
+   still be left behind by a mode flip, and `cursor: none !important` on a
+   device with a stylus would hide a pointer the player is actually using. */
+body.pointer-mode.star-cursor-active,
+body.pointer-mode.star-cursor-active #start-screen,
+body.pointer-mode.star-cursor-active #leaderboard-screen,
+body.pointer-mode.star-cursor-active #settings-screen,
+body.pointer-mode.star-cursor-active #account-screen,
+body.pointer-mode.star-cursor-active .pilot-chip,
+body.pointer-mode.star-cursor-active button,
+body.pointer-mode.star-cursor-active .game-button,
+body.pointer-mode.star-cursor-active .lb-tab,
+body.pointer-mode.star-cursor-active .lb-board,
+body.pointer-mode.star-cursor-active input,
+body.pointer-mode.star-cursor-active a {
   cursor: none !important;
 }
 
@@ -493,6 +522,7 @@ body.star-cursor-active a {
   display: none;
   overflow: hidden;
   cursor: crosshair;
+
 }
 
 #bg-canvas {
@@ -2059,4 +2089,184 @@ body.star-cursor-active a {
 
 @media (prefers-reduced-motion: reduce) {
   .pilot-chip, .oauth-btn, .account-tab { transition: none; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   v3.5  —  MOBILE / TOUCH
+   Everything below is either scoped to body.touch-mode or is a gate panel
+   that only a touch device can reach. The desktop experience is unchanged.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Cursor sanity ────────────────────────────────────────────────────────
+   The desktop build hides the system cursor over the playfield in favour of
+   the star ornament. On touch there is nothing to hide and a stylus user
+   would lose their pointer, so put it back. */
+body.touch-mode,
+body.touch-mode #game-container,
+body.touch-mode button,
+body.touch-mode .game-button,
+body.touch-mode input,
+body.touch-mode a {
+  cursor: auto !important;
+}
+
+/* ── Touch pause button ───────────────────────────────────────────────────
+   Space is the only pause on desktop and a phone has no Space, so this is a
+   touch player's only way out of a run they don't want to finish.
+
+   Top-centre is the one part of the HUD strip that is empty: #ui-left holds
+   score and lives, #ui-right holds stage and combo, and the stage progress
+   bar runs behind. It is also the furthest point from where a thumb rests,
+   which matters because a mis-tap here pauses a live run.
+
+   `display` is owned by game.js (applyTouchChrome), which is why the rule
+   below sets `display: none` and nothing re-enables it in CSS. */
+.touch-pause-btn {
+  display: none;
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+
+  align-items: center;
+  justify-content: center;
+  width: 54px;
+  height: 40px;
+
+  font-family: var(--font-game);
+  font-size: 20px;
+  line-height: 1;
+  letter-spacing: 2px;
+  color: var(--cyan);
+
+  background: rgba(0, 20, 20, 0.55);
+  border: 2px solid rgba(0, 255, 204, 0.5);
+  border-radius: 6px;
+  padding: 0;
+
+  /* The button is inside the scaled playfield, so a 40px box is 40 LOGICAL
+     px and shrinks with the scale like everything else. At a typical phone
+     scale of ~0.5 that lands near 20 physical CSS px, which is under the
+     ~44px comfortable-tap guidance — hence the generous transparent hit
+     padding below rather than a bigger visible button. */
+  outline: 4px solid transparent;
+  outline-offset: 4px;
+}
+
+/* The visible box is 54x40 LOGICAL px, so at a typical phone scale of ~0.5
+   it lands near 27x20 physical CSS px — well under the ~44px comfortable-tap
+   size. Rather than draw a button big enough to intrude on the HUD, extend
+   the hit area with a transparent pseudo-element. */
+.touch-pause-btn::before {
+  content: '';
+  position: absolute;
+  inset: -22px -26px;
+}
+
+.touch-pause-btn:active {
+  background: rgba(0, 255, 204, 0.22);
+  border-color: var(--cyan);
+}
+
+/* ── Rotate gate ──────────────────────────────────────────────────────────
+   viewport.js only shows this when it has confirmed that rotating would
+   actually fix the fit, so the arrow is never a lie. */
+.gate-rotate-icon {
+  font-size: 54px;
+  line-height: 1;
+  color: var(--cyan);
+  margin-bottom: 14px;
+  animation: gate-rotate-hint 2.4s ease-in-out infinite;
+}
+
+@keyframes gate-rotate-hint {
+  0%, 55%, 100% { transform: rotate(0deg); }
+  75%, 90%      { transform: rotate(90deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gate-rotate-icon { animation: none; }
+}
+
+/* ── Leaderboard board switch ─────────────────────────────────────────────
+   Two tables, two instruments. This row sits above the existing
+   scores/combos tabs: which board you're on is the coarser question, so it
+   reads first. */
+.lb-boards {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.lb-board {
+  font-family: var(--font-game);
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: rgba(255, 255, 255, 0.45);
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  padding: 5px 16px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.lb-board:hover { color: rgba(255, 255, 255, 0.8); }
+
+.lb-board.active {
+  color: var(--cyan);
+  border-color: var(--cyan);
+  background: rgba(0, 255, 204, 0.08);
+}
+
+/* ── Touch-mode form fields ───────────────────────────────────────────────
+   iOS zooms the whole page when a focused input's font-size is under 16px,
+   and on a fixed, letterboxed, non-scalable layout that zoom has nowhere to
+   go — it just breaks the mapping between finger and paddle and cannot be
+   undone. 16px is the whole fix. */
+body.touch-mode input,
+body.touch-mode select,
+body.touch-mode textarea {
+  font-size: 16px;
+}
+
+/* ── Touch-mode hit targets ───────────────────────────────────────────────
+   These sit outside the scaled playfield (menus are laid out at logical
+   size but read at whatever scale the screen gives), so a little extra
+   padding here is cheap and makes the menus thumb-usable. */
+body.touch-mode .game-button {
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+body.touch-mode .lb-tab,
+body.touch-mode .lb-board,
+body.touch-mode .account-tab {
+  padding-top: 9px;
+  padding-bottom: 9px;
+}
+
+/* Hover styling on a touch device sticks after a tap until you tap
+   elsewhere, which reads as a stuck selection. Suppress it where a browser
+   reports no hover capability at all. */
+@media (any-hover: none) {
+  .lb-board:hover { color: rgba(255, 255, 255, 0.45); }
+}
+
+/* ── Landscape phones are short ───────────────────────────────────────────
+   A phone in landscape is roughly 360 CSS px tall. The menu screens scroll,
+   but the headings eat a disproportionate share of that, so trim them.
+   Height-based rather than width-based on purpose: the constraint here is
+   vertical, and a width query would also catch a narrow desktop window that
+   has plenty of height. */
+@media (max-height: 460px) {
+  .lb-heading,
+  .settings-heading,
+  .account-heading { font-size: 20px; margin-bottom: 10px; }
+
+  .settings-section { margin-bottom: 14px; }
+  .subtitle         { font-size: 13px; }
 }

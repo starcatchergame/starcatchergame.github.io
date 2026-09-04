@@ -86,12 +86,14 @@ window.addEventListener('load', () => {
     lbScoresPanel:  document.getElementById('lb-scores-panel'),
     lbCombosPanel:  document.getElementById('lb-combos-panel'),
     lbTabs:         document.querySelectorAll('.lb-tab'),
+    lbBoardTabs:    document.querySelectorAll('.lb-board'),
     lbBackBtn:      document.getElementById('lb-back-btn'),
 
     // Game canvas + paddle
     canvas:         document.getElementById('bg-canvas'),
     paddleWrap:     document.getElementById('paddle-wrapper'),
     paddle:         document.getElementById('paddle'),
+    touchPauseBtn:  document.getElementById('touch-pause-btn'),
 
     // In-game HUD
     scoreEl:        document.getElementById('score'),
@@ -149,6 +151,9 @@ window.addEventListener('load', () => {
     sfxVolumeSlider:   document.getElementById('sfx-volume'),
     musicVolVal:       document.getElementById('music-vol-val'),
     sfxVolVal:         document.getElementById('sfx-vol-val'),
+    touchSection:      document.getElementById('settings-touch-section'),
+    touchSensSlider:   document.getElementById('touch-sensitivity'),
+    touchSensVal:      document.getElementById('touch-sens-val'),
 
     // Tutorial
     tutorialOverlay:    document.getElementById('tutorial-overlay'),
@@ -234,7 +239,42 @@ window.addEventListener('load', () => {
     musicVolume:   0.8,
     sfxVolume:     0.8,
     openedFrom:    null,
+
+    // v3.5 — logical paddle px per logical px of finger travel. Touch only.
+    touchSensitivity: CONFIG.INPUT.TOUCH_SENSITIVITY,
   };
+
+  // v3.5 — sensitivity is the one setting worth persisting: it is a physical
+  // calibration to the player's hand and their phone, not a preference they
+  // want to re-express every session. Nothing else in `settings` is stored,
+  // so this is a single dedicated key rather than a settings blob.
+  const TOUCH_SENS_KEY = 'starcatcher_touch_sensitivity';
+
+  function loadTouchSensitivity() {
+    try {
+      const raw = parseFloat(localStorage.getItem(TOUCH_SENS_KEY));
+      if (!isNaN(raw)) {
+        settings.touchSensitivity = Math.min(
+          CONFIG.INPUT.TOUCH_SENSITIVITY_MAX,
+          Math.max(CONFIG.INPUT.TOUCH_SENSITIVITY_MIN, raw)
+        );
+      }
+    } catch (e) { /* private browsing — fall back to the default */ }
+  }
+
+  function saveTouchSensitivity() {
+    try { localStorage.setItem(TOUCH_SENS_KEY, String(settings.touchSensitivity)); }
+    catch (e) { /* silently fail */ }
+  }
+
+  loadTouchSensitivity();
+
+  // v3.5 — the star cursor is a mouse ornament: it hides the real cursor and
+  // draws a trail from mousemove. On touch there is no mousemove and no
+  // cursor to hide, so every call is routed through these two wrappers
+  // instead of being guarded at each of the seven call sites.
+  function cursorEnable()  { if (Platform.isPointerMode()) StarCursor.enable(); }
+  function cursorDisable() { StarCursor.disable(); }
 
   // Gameplay fancy background (no title glow)
   const GameBG = createFancyBG({ showTitleGlow: false });
@@ -312,6 +352,12 @@ window.addEventListener('load', () => {
     paddleExpanded:  false,
 
     lbOpenedFromGameOver: false,  // tracks which screen to return to from leaderboard
+
+    // v3.5 — the board this run belongs to, captured at launch and never
+    // re-derived. If it were read at submit time, plugging a mouse in on the
+    // game-over screen would silently move a thumb-played run onto the mouse
+    // board. See Platform.lock().
+    board:           'pointer',
 
     // v2.2: cached difficulty value, updated once per frame
     cachedDifficulty: 0,
@@ -421,17 +467,139 @@ window.addEventListener('load', () => {
     }, 100);
   }
 
+  /**
+   * The one place the paddle actually moves. Both input paths compute a
+   * desired logical centre and hand it here, so clamping and the DOM write
+   * exist once rather than twice.
+   */
+  function movePaddleTo(logicalX) {
+    const half    = paddleState.width / 2;
+    const clamped = Math.max(half, Math.min(logicalX, layout.containerW - half));
+    paddleState.x = clamped;
+    DOM.paddleWrap.style.left = clamped + 'px';
+  }
+
+  /** Can the paddle be driven right now? Shared by both input paths. */
+  function paddleIsLive() {
+    return state.active && !state.paused;
+  }
+
+  // ── Pointer input (absolute) ───────────────────────────────────────────────
+
   DOM.container.addEventListener('mousemove', e => {
-    if (!state.active || state.paused) return;
+    if (!paddleIsLive()) return;
+
+    // v3.5 — a real mousemove on a hybrid machine means the player has gone
+    // back to the mouse, so the next run belongs on the pointer board. Kept
+    // above the live check would fire on menu screens too, which is why it
+    // sits here: only movement that actually drives the paddle counts.
+    Platform.observePointerMove();
+
     // v3.3 — pointer events are in screen pixels; the playfield is in
     // logical ones. Dividing by the scale is the whole conversion, and it
     // is why zooming no longer buys anyone a wider paddle.
-    const x    = (e.clientX - layout.containerLeft) / layout.scale;
-    const half = paddleState.width / 2;
-    const clamped = Math.max(half, Math.min(x, layout.containerW - half));
-    paddleState.x = clamped;
-    DOM.paddleWrap.style.left = clamped + 'px';
+    movePaddleTo((e.clientX - layout.containerLeft) / layout.scale);
   });
+
+  // ── Touch input (relative drag) ────────────────────────────────────────────
+  //
+  // v3.5. The pointer path is ABSOLUTE — the paddle is wherever the cursor
+  // is. Touch can't work that way. A finger is opaque and roughly 45px wide,
+  // so absolute tracking parks the player's hand on top of the exact spot
+  // they're trying to aim, and pins the reachable field to the width of their
+  // thumb's arc.
+  //
+  // So touch is RELATIVE: press anywhere on the playfield, and the paddle
+  // moves by however far the finger has travelled since it went down,
+  // multiplied by a sensitivity the player can tune. Consequences worth
+  // knowing about:
+  //
+  //   - The paddle stays put when the finger lifts. Re-grabbing anywhere
+  //     continues from where it is, so you can "ratchet" across the field
+  //     with repeated short drags, exactly like lifting a mouse.
+  //   - The anchor is re-based on every touchdown, so drift can't accumulate.
+  //   - Clamping happens on the OUTPUT, not the anchor, which means dragging
+  //     hard into the left wall and then back doesn't leave dead travel.
+
+  const touchDrag = {
+    id:       null,   // identifier of the touch we're tracking
+    startX:   0,      // clientX at touchdown
+    startPad: 0,      // paddle centre (logical) at touchdown
+    moved:    false,  // has this drag cleared the deadzone?
+  };
+
+  /**
+   * Touches that land on UI must stay taps. The draft cards, the pause
+   * button and the overlay buttons all live inside #game-container, so
+   * without this the first tap of a draft pick would start a paddle drag and
+   * get its default suppressed.
+   */
+  function _isInteractive(target) {
+    return !!(target && target.closest &&
+      target.closest('button, input, select, textarea, a, .draft-card, .overlay-panel, #tutorial-overlay'));
+  }
+
+  DOM.container.addEventListener('touchstart', e => {
+    if (!Platform.isTouchMode()) return;
+    if (_isInteractive(e.target)) return;
+    if (!paddleIsLive()) return;
+    if (touchDrag.id !== null) return;   // already dragging; ignore extra fingers
+
+    const t = e.changedTouches[0];
+    touchDrag.id       = t.identifier;
+    touchDrag.startX   = t.clientX;
+    touchDrag.startPad = paddleState.x;
+    touchDrag.moved    = false;
+
+    // Stops the browser treating this as the start of a scroll, a pull to
+    // refresh, or the first half of a double-tap zoom. CSS touch-action
+    // handles most of it, but Safari still needs the explicit call.
+    e.preventDefault();
+  }, { passive: false });
+
+  DOM.container.addEventListener('touchmove', e => {
+    if (touchDrag.id === null) return;
+
+    // The tracked finger may not be changedTouches[0] once a second finger
+    // is down, so find it by identifier rather than by position.
+    let t = null;
+    for (const c of e.changedTouches) {
+      if (c.identifier === touchDrag.id) { t = c; break; }
+    }
+    if (!t) return;
+
+    if (!paddleIsLive()) { touchDrag.id = null; return; }
+
+    // Screen px → logical px, then scale by the player's sensitivity. Doing
+    // the scale conversion first is what makes sensitivity mean the same
+    // thing on every phone: it's a ratio of logical field travel to physical
+    // finger travel, not of pixels to pixels.
+    const deltaLogical = (t.clientX - touchDrag.startX) / layout.scale;
+
+    if (!touchDrag.moved) {
+      if (Math.abs(deltaLogical) < CONFIG.INPUT.TOUCH_DEADZONE_PX) {
+        e.preventDefault();
+        return;
+      }
+      touchDrag.moved = true;
+      // Only now is this unambiguously a player dragging the paddle with a
+      // finger, which is the signal the leaderboard split keys on.
+      Platform.observeTouchDrag();
+    }
+
+    movePaddleTo(touchDrag.startPad + deltaLogical * settings.touchSensitivity);
+    e.preventDefault();
+  }, { passive: false });
+
+  function _endTouchDrag(e) {
+    if (touchDrag.id === null) return;
+    for (const c of e.changedTouches) {
+      if (c.identifier === touchDrag.id) { touchDrag.id = null; return; }
+    }
+  }
+
+  DOM.container.addEventListener('touchend',    _endTouchDrag);
+  DOM.container.addEventListener('touchcancel', _endTouchDrag);
 
   // ─── 5. UI UPDATES ──────────────────────────────────────────────────────────
 
@@ -1536,6 +1704,35 @@ window.addEventListener('load', () => {
 
   DOM.resumeBtn.addEventListener('click', () => resumeGame());
 
+  /**
+   * v3.5 — show or hide the touch-only furniture. The pause button is the
+   * important one: Space is the only way to pause on desktop, and a phone
+   * has no Space. Without this a touch player's only exit from a run is to
+   * lose it.
+   */
+  function applyTouchChrome() {
+    const touch = Platform.isTouchMode();
+    DOM.touchPauseBtn.style.display = touch ? 'flex' : 'none';
+    DOM.touchSection.style.display  = touch ? 'block' : 'none';
+  }
+
+  DOM.touchPauseBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    if (!state.active || state.countingDown) return;
+    if (inMenuPhase()) return;
+    if (DOM.settingsScreen.style.display === 'flex') return;
+    if (state.paused) resumeGame();
+    else pauseGame(true);
+  });
+
+  // The button lives inside #game-container, whose touch handler suppresses
+  // default behaviour on everything it doesn't recognise as UI. _isInteractive
+  // already exempts <button>, but stopping propagation here too means a
+  // mis-aimed tap on the button's edge never nudges the paddle.
+  DOM.touchPauseBtn.addEventListener('touchstart', e => e.stopPropagation());
+
+  applyTouchChrome();
+
   // ─── 12. COUNTDOWN ──────────────────────────────────────────────────────────
 
   /**
@@ -1569,6 +1766,12 @@ window.addEventListener('load', () => {
 
   async function triggerGameOver() {
     state.active = false;
+
+    // The run is over, so the mode is free to follow the hardware again.
+    // `state.board` already holds the captured value, so nothing about this
+    // run's submission depends on the mode staying put.
+    Platform.unlock();
+
     stopStageDirector();
     stopGameLoop();
     releaseAllObjects();
@@ -1610,7 +1813,7 @@ window.addEventListener('load', () => {
       DOM.nameEntry.style.display = 'none';
       DOM.runSummary.insertAdjacentHTML('beforeend',
         '<div class="dv-tainted-note">DEV RUN — NOT ELIGIBLE FOR THE BOARD</div>');
-    } else if (await Leaderboard.qualifies(state.score, state.sessionMaxCombo)) {
+    } else if (await Leaderboard.qualifies(state.score, state.sessionMaxCombo, state.board)) {
       showNameEntry();
     } else {
       DOM.nameEntry.style.display = 'none';
@@ -1618,7 +1821,7 @@ window.addEventListener('load', () => {
 
     DOM.viewLbBtn.style.display = 'inline-block';
     DOM.gameOver.style.display  = 'block';
-    StarCursor.enable();
+    cursorEnable();
   }
 
   /**
@@ -1628,6 +1831,16 @@ window.addEventListener('load', () => {
    */
   function showNameEntry() {
     const signedIn = Auth.isLoggedIn();
+
+    // v3.5 — say which board. "You made the hall of fame" is a different
+    // claim on each, and a player who doesn't know there are two would
+    // reasonably read it as the only one.
+    const notice = DOM.nameEntry.querySelector('.qualify-notice');
+    if (notice) {
+      notice.textContent = state.board === 'touch'
+        ? '\ud83c\udfc6 YOU MADE THE TOUCH HALL OF FAME!'
+        : '\ud83c\udfc6 YOU MADE THE HALL OF FAME!';
+    }
 
     DOM.nameEntry.style.display       = 'block';
     DOM.nameEntryUser.style.display   = signedIn ? 'flex' : 'none';
@@ -1642,7 +1855,12 @@ window.addEventListener('load', () => {
       DOM.postingAsName.textContent = Auth.displayName();
     } else {
       DOM.playerName.value = Auth.guestName();
-      if (window.matchMedia('(min-width: 780px)').matches) {
+
+      // v3.5 — pointer mode only. The old check was a width media query,
+      // which a phone in landscape passes: focusing there throws the
+      // on-screen keyboard up over the game-over panel the instant it
+      // appears, hiding the score the player just earned.
+      if (Platform.isPointerMode() && window.matchMedia('(min-width: 780px)').matches) {
         setTimeout(() => { DOM.playerName.focus(); DOM.playerName.select(); }, 50);
       }
     }
@@ -1663,7 +1881,7 @@ window.addEventListener('load', () => {
     DOM.submitStatus.className      = 'submit-status';
     DOM.submitStatus.textContent    = 'POSTING…';
 
-    const ok = await Leaderboard.submit(name, state.score, state.sessionMaxCombo);
+    const ok = await Leaderboard.submit(name, state.score, state.sessionMaxCombo, state.board);
 
     if (!ok) {
       DOM.submitStatus.className      = 'submit-status is-error';
@@ -1739,13 +1957,34 @@ window.addEventListener('load', () => {
       </table>`;
   }
 
-  async function renderLeaderboard() {
-    const { scores, combos } = await Leaderboard.getAll();
+  /**
+   * v3.5 — which board is currently on screen. Separate from the run's board:
+   * a mouse player is welcome to browse the touch board, and a player who has
+   * just finished a touch run lands on the touch board but can flip to the
+   * other one.
+   */
+  let _lbBoard = 'pointer';
+
+  async function renderLeaderboard(board) {
+    if (board) _lbBoard = board;
+
+    // Two round trips to two tables, so say something while they land rather
+    // than leaving the last board's rows up under the new board's tab.
+    DOM.lbScoresPanel.innerHTML = '<p class="lb-empty">LOADING\u2026</p>';
+    DOM.lbCombosPanel.innerHTML = '<p class="lb-empty">LOADING\u2026</p>';
+
+    const requested = _lbBoard;
+    const { scores, combos } = await Leaderboard.getAll(requested);
+
+    // The player can switch boards faster than a fetch resolves; a stale
+    // response must not overwrite the board they're now looking at.
+    if (requested !== _lbBoard) return;
+
     DOM.lbScoresPanel.innerHTML = _renderTable(scores, 'score', 'SCORE');
     DOM.lbCombosPanel.innerHTML = _renderTable(combos, 'combo', 'COMBO');
   }
 
-  // Tab switching
+  // Metric tab switching (scores / combos) — purely a view flip, no refetch.
   DOM.lbTabs.forEach(tab => {
     tab.addEventListener('click', () => {
       DOM.lbTabs.forEach(t => t.classList.remove('active'));
@@ -1756,9 +1995,32 @@ window.addEventListener('load', () => {
     });
   });
 
+  // Board switching (mouse / touch) — a different table, so this refetches.
+  DOM.lbBoardTabs.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const which = btn.dataset.board;
+      if (which === _lbBoard) return;
+      AudioManager.play(520, 'sine', 0.08, 0.1);
+      _setLbBoardTabs(which);
+      renderLeaderboard(which);
+    });
+  });
+
+  function _setLbBoardTabs(which) {
+    DOM.lbBoardTabs.forEach(b => b.classList.toggle('active', b.dataset.board === which));
+  }
+
   function showLeaderboard(fromGameOver = false) {
     state.lbOpenedFromGameOver = fromGameOver;
-    renderLeaderboard();
+
+    // Open on the board that matches what the player just did — or, from the
+    // title screen, on the one they'd be posting to if they hit start now.
+    // Showing a phone player the mouse board first would be showing them a
+    // board they cannot compete on.
+    const board = fromGameOver ? state.board : Leaderboard.boardKey(null);
+    _setLbBoardTabs(board);
+    renderLeaderboard(board);
+
     // Reset tabs to scores view
     DOM.lbTabs.forEach(t => t.classList.toggle('active', t.dataset.tab === 'scores'));
     DOM.lbScoresPanel.style.display = 'block';
@@ -1812,8 +2074,12 @@ window.addEventListener('load', () => {
     {
       title: 'WELCOME, PILOT',
       titleColor: 'var(--cyan)',
-      body: `<p>Your mission: catch falling stars with your paddle before they slip past.</p>
-             <p>Move your <span style="color:var(--cyan);">mouse</span> to control the paddle.</p>`,
+      body: Platform.isTouchMode()
+        ? `<p>Your mission: catch falling stars with your paddle before they slip past.</p>
+           <p><span style="color:var(--cyan);">Drag anywhere</span> on the screen to steer the paddle \u2014 your finger doesn't have to be on it.</p>
+           <p style="margin-top:12px;color:rgba(255,255,255,0.5);font-size:13px;">Lift and re-drag to keep going in the same direction. Tune the speed in Settings.</p>`
+        : `<p>Your mission: catch falling stars with your paddle before they slip past.</p>
+           <p>Move your <span style="color:var(--cyan);">mouse</span> to control the paddle.</p>`,
     },
     {
       title: 'PRECISION MATTERS',
@@ -1861,8 +2127,10 @@ window.addEventListener('load', () => {
     {
       title: 'READY FOR LAUNCH',
       titleColor: 'var(--cyan)',
-      body: `<p>Press <span style="color:var(--cyan);font-weight:bold;">SPACE</span> to pause at any time.</p>
-             <p style="margin-top:14px;font-size:18px;color:var(--cyan);letter-spacing:3px;">Good luck out there, pilot!</p>`,
+      body: (Platform.isTouchMode()
+        ? `<p>Tap <span style="color:var(--cyan);font-weight:bold;">\u2016</span> at the top of the screen to pause at any time.</p>`
+        : `<p>Press <span style="color:var(--cyan);font-weight:bold;">SPACE</span> to pause at any time.</p>`) +
+        `<p style="margin-top:14px;font-size:18px;color:var(--cyan);letter-spacing:3px;">Good luck out there, pilot!</p>`,
     },
   ];
 
@@ -1936,7 +2204,7 @@ window.addEventListener('load', () => {
       TitleBG.stop();
       stopTitleMusic();
       stopLbMusic();
-      StarCursor.disable();
+      cursorDisable();
       DOM.startScreen.style.display    = 'none';
       DOM.lbScreen.style.display       = 'none';
       DOM.settingsScreen.style.display = 'none';
@@ -1959,10 +2227,17 @@ window.addEventListener('load', () => {
 
   function _launchGame() {
     AudioManager.resume();
+
+    // v3.5 — freeze the input mode for the whole run and remember which
+    // board the result belongs on. Locking matters on convertibles: brushing
+    // the trackpad mid-run would otherwise flip the mode underneath a player
+    // who is still using their thumb.
+    state.board = Leaderboard.boardKey(Platform.lock());
+
     TitleBG.stop();
     stopTitleMusic();
     stopLbMusic();
-    StarCursor.disable();
+    cursorDisable();
 
     // Hide all screens / overlays
     DOM.startScreen.style.display    = 'none';
@@ -2127,7 +2402,7 @@ window.addEventListener('load', () => {
     DOM.container.style.display   = 'none';
     stopTitleMusic();
     TitleBG.stop();
-    StarCursor.disable();
+    cursorDisable();
 
     // Mount Ratchet Cars into a dedicated container
     const mount = document.getElementById('ratchet-cars-mount');
@@ -2147,6 +2422,12 @@ window.addEventListener('load', () => {
     DOM.sfxVolumeSlider.value     = Math.round(settings.sfxVolume * 100);
     DOM.musicVolVal.textContent   = Math.round(settings.musicVolume * 100) + '%';
     DOM.sfxVolVal.textContent     = Math.round(settings.sfxVolume * 100) + '%';
+
+    // v3.5 — the slider is integer-stepped (6..30) and the setting is a
+    // float (0.6..3.0), so the two are a factor of ten apart.
+    applyTouchChrome();
+    DOM.touchSensSlider.value      = Math.round(settings.touchSensitivity * 10);
+    DOM.touchSensVal.textContent   = settings.touchSensitivity.toFixed(1) + 'x';
 
     // Hide the source screen
     if (from === 'start') {
@@ -2199,7 +2480,7 @@ window.addEventListener('load', () => {
         DOM.gameOver.style.display  = 'none';
         DOM.container.style.display = 'none';
       }
-      StarCursor.enable();
+      cursorEnable();
     },
 
     exitScreen(from) {
@@ -2219,7 +2500,7 @@ window.addEventListener('load', () => {
       // A new pilot means a different "YOU" row and possibly a new name on
       // existing entries, so the cached board is no longer trustworthy.
       Leaderboard.refresh();
-      if (DOM.lbScreen.style.display  === 'flex')  renderLeaderboard();
+      if (DOM.lbScreen.style.display  === 'flex')  renderLeaderboard(_lbBoard);
       if (DOM.nameEntry.style.display === 'block') showNameEntry();
     },
 
@@ -2237,6 +2518,22 @@ window.addEventListener('load', () => {
     if (settings.openedFrom === 'start') {
       DOM.titleCanvas.style.display = settings.fancyStars ? '' : 'none';
     }
+  });
+
+  // ── Touch drag sensitivity (v3.5) ───────────────────────────────────────────
+
+  DOM.touchSensSlider.addEventListener('input', () => {
+    const raw = parseInt(DOM.touchSensSlider.value, 10) / 10;
+    settings.touchSensitivity = Math.min(
+      CONFIG.INPUT.TOUCH_SENSITIVITY_MAX,
+      Math.max(CONFIG.INPUT.TOUCH_SENSITIVITY_MIN, raw)
+    );
+    DOM.touchSensVal.textContent = settings.touchSensitivity.toFixed(1) + 'x';
+    saveTouchSensitivity();
+
+    // Live-applied: the setting is read on every touchmove, so a player
+    // tuning this from the pause menu feels the change the moment they
+    // resume rather than on the next run.
   });
 
   // ── Score Popups toggle ─────────────────────────────────────────────────────
@@ -2389,7 +2686,23 @@ window.addEventListener('load', () => {
     }
   );
 
-  StarCursor.enable();   // start on title screen
+  // v3.5 — the star cursor is pointer-only. `enable()` hides the real cursor
+  // via a body class and only ever redraws on mousemove, so on a phone it
+  // would leave a frozen star at the origin over a page with no cursor at
+  // all. Gated here rather than inside StarCursor so the module stays a dumb
+  // renderer with no opinion about platforms.
+  cursorEnable();   // start on title screen — pointer mode only
+
+  // A mouse plugged into a tablet mid-session should bring the ornament with
+  // it, and unplugging it should take it away again. Only do this on menu
+  // screens: turning the cursor on mid-run would hide the system cursor
+  // during play, and the run's board is locked anyway.
+  Platform.onModeChange(() => {
+    if (state.active) return;
+    if (Platform.isPointerMode()) cursorEnable();
+    else                          cursorDisable();
+    applyTouchChrome();
+  });
 
   // ─── 20. DEBUG HANDLE + DEV BRIDGE ──────────────────────────────────────
   //
@@ -2434,7 +2747,13 @@ window.addEventListener('load', () => {
     CONFIG, Upgrades, StageGen, RNG,
 
     // Modules
-    Auth, AccountUI, Leaderboard,
+    Auth, AccountUI, Leaderboard, Platform, Viewport,
+
+    // v3.5 — input debugging. `SC.input()` prints what the game thinks it is
+    // running on; `SC.forceInput('touch')` makes a desktop browser behave
+    // like a phone for testing (persisted, so it survives the reload).
+    input:      () => Platform.describe(),
+    forceInput: m => { const r = Platform.force(m); Viewport.apply(); applyTouchChrome(); return r; },
 
     // UI refresh
     updateScore, updateLives, updateCombo, updateStageHUD, renderPerkStrip,

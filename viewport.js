@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Star Catcher v3.4 — Fixed Logical Viewport + Playability Gate
+ * Star Catcher v3.5 — Fixed Logical Viewport + Playability Gate
  *
  * ── WHY THIS EXISTS ───────────────────────────────────────────────────────
  *
@@ -51,6 +51,21 @@
  * acceleration — real, uncontrollable, and true of every mouse game on the
  * web. The gate bounds it from below; nothing bounds it from above.
  *
+ * ── v3.5: TOUCH ───────────────────────────────────────────────────────────
+ *
+ * The playfield is deliberately UNCHANGED on mobile. A phone held sideways
+ * has roughly 2400 x 1080 device pixels, which fits 1536 x 700 at a scale of
+ * about 1.5 — comfortably above even the desktop floor. So a touch player
+ * gets the same field, the same paddle share, and the same stage layouts as
+ * everyone else. Only two things differ: the floor (see CONFIG) and the fact
+ * that the paddle is dragged rather than followed.
+ *
+ * Portrait is refused rather than supported. A 1536 x 700 field rotated into
+ * a 1080-wide portrait window fits at 0.70, and the alternative — a second
+ * logical field shaped for portrait — would be a different game: the paddle
+ * would cover 15.7%% of a 700px-wide field instead of 7.2%% of a 1536px one.
+ * That is a fork in the difficulty curve, not a layout tweak.
+ *
  * ── HOOK FOR LATER ────────────────────────────────────────────────────────
  *
  * Because the playfield is an explicit number rather than an accident, a
@@ -66,7 +81,7 @@ const Viewport = (() => {
   let offX     = 0;      // screen-space left edge of the scaled box
   let offY     = 0;      // screen-space top edge
   let blocked  = false;  // is the game currently refusing to run?
-  let reason   = null;   // 'small' | 'pointer' | null
+  let reason   = null;   // 'small' | 'orientation' | 'pointer' | null
 
   const watchers      = [];   // fired after every recompute
   const blockWatchers = [];   // fired only when the blocked state flips
@@ -86,20 +101,20 @@ const Viewport = (() => {
   }
 
   /**
-   * Does this machine have a mouse, trackpad or stylus — something that can
-   * hover and move continuously? The paddle follows pointer movement, so a
-   * touch-only device cannot play the game as it currently exists: there is
-   * no mousemove to follow, and a tap-to-teleport paddle would be a
-   * different game with a different difficulty curve.
-   *
-   * `any-pointer: fine` rather than `pointer: fine` on purpose — a tablet
-   * with a mouse plugged in reports a coarse PRIMARY pointer but a fine one
-   * is available, and that machine can play.
+   * v3.5 — pointer detection moved to platform.js, which several other
+   * systems now read from. Kept as a passthrough so nothing that called
+   * Viewport.hasFinePointer() has to change.
    */
-  function hasFinePointer() {
-    if (!window.matchMedia) return true;   // ancient browser; assume desktop
-    const mq = window.matchMedia('(any-pointer: fine)');
-    return mq.media === 'not all' ? true : mq.matches;   // query unsupported
+  function hasFinePointer() { return Platform.hasFinePointer(); }
+
+  /**
+   * Which floor applies. The two numbers mean genuinely different things —
+   * fairness on a mouse, legibility on a thumb — and CONFIG explains why.
+   */
+  function minScale() {
+    return Platform.isTouchMode()
+      ? CONFIG.GAME.MIN_DEVICE_SCALE_TOUCH
+      : CONFIG.GAME.MIN_DEVICE_SCALE;
   }
 
   /** Recompute the fit, write the transform, and run the gate. */
@@ -123,18 +138,66 @@ const Viewport = (() => {
     // the field is a flick of the wrist instead of a sweep, and that is its
     // own kind of easy mode. A refusal is honest; a silent clamp would
     // quietly hand those players a shorter game.
+    //
+    // v3.5 — the floor now depends on how the player is driving, and the
+    // "rotate" case is EARNED rather than assumed. Telling a phone in
+    // portrait to rotate is only useful advice if rotating would actually
+    // fix it, so we measure the swapped box and check. A portrait tablet
+    // where the field already fits is never told to do anything, and a
+    // phone too small to play in either orientation gets the honest "too
+    // small" message rather than being sent on a pointless rotation.
+    const floor    = minScale();
+    const portrait = Platform.isPortrait();
+
+    // ── Portrait needs a HIGHER bar, not the same one ─────────────────────
+    //
+    // The touch floor is tuned for landscape, and a phone in portrait can
+    // scrape over it for the wrong reason. A 393 x 852 phone at dpr 3 gives
+    // a portrait fit of 0.77 — above the 0.75 floor — because the fit is
+    // min(width-driven, height-driven) and the height is enormous. What that
+    // actually renders is the full 1536 x 700 field squeezed to 393 CSS px
+    // wide: a 179px letterbox strip floating in the middle of a tall screen.
+    // Technically legible, genuinely miserable.
+    //
+    // So portrait must clear the FULL desktop floor, not the touch one. That
+    // single threshold sorts the two cases correctly without needing to ask
+    // what kind of device this is:
+    //
+    //     phone in portrait   ~0.5-0.8  →  below 1.0  →  told to rotate
+    //     tablet in portrait  ~1.07     →  above 1.0  →  plays as-is
+    //
+    // A tablet in portrait is not making a compromise, so it is not asked to
+    // do anything. A phone always is.
+    const needed = (Platform.isTouchMode() && portrait)
+      ? Math.max(floor, CONFIG.GAME.MIN_DEVICE_SCALE)
+      : floor;
+
     let nextReason = null;
-    if (!hasFinePointer())                   nextReason = 'pointer';
-    else if (deviceFit < G.MIN_DEVICE_SCALE) nextReason = 'small';
+    if (Platform.hasNoUsableInput()) {
+      nextReason = 'pointer';
+    } else if (deviceFit < needed) {
+      // Would turning the device sideways actually fix this? Measure the
+      // swapped box rather than assuming. A phone too small to play in
+      // either orientation gets the honest "too small" message instead of
+      // being sent on a pointless rotation.
+      const rotatedFit = Math.min(
+        (availH * ratio) / width(),
+        (availW * ratio) / height()
+      );
+      const rotatingWouldFix = Platform.isTouchDevice() && portrait &&
+                               rotatedFit >= floor;
+      nextReason = rotatingWouldFix ? 'orientation' : 'small';
+    }
 
     const wasBlocked = blocked;
+    const wasReason  = reason;
     blocked = nextReason !== null;
     reason  = nextReason;
 
     // Clamp for display only. When blocked we still lay the game out at the
     // floor so the overlay has something coherent behind it; when not
     // blocked the ceiling is off by default and the upper clamp is a no-op.
-    const shown = Math.min(Math.max(deviceFit, G.MIN_DEVICE_SCALE), G.MAX_DEVICE_SCALE);
+    const shown = Math.min(Math.max(deviceFit, floor), G.MAX_DEVICE_SCALE);
     scale = shown / ratio;
 
     offX = Math.round((availW - width()  * scale) / 2);
@@ -149,7 +212,11 @@ const Viewport = (() => {
     for (const fn of watchers) {
       try { fn(scale); } catch (err) { console.error('[Viewport] watcher failed', err); }
     }
-    if (blocked !== wasBlocked) {
+    // v3.5 — also fire when the REASON changes while still blocked. Turning
+    // a phone from portrait to a still-too-small landscape swaps the message
+    // without unblocking, and a listener that only watched the boolean would
+    // never hear about it.
+    if (blocked !== wasBlocked || reason !== wasReason) {
       for (const fn of blockWatchers) {
         try { fn(blocked, reason); }
         catch (err) { console.error('[Viewport] block watcher failed', err); }
@@ -176,41 +243,69 @@ const Viewport = (() => {
     gate.style.display = 'flex';
     gate.setAttribute('aria-hidden', 'false');
 
+    // v3.5 — no fine pointer AND no touch. A TV browser driven by a remote,
+    // essentially. The old "get a mouse" copy used to catch every phone on
+    // earth; now it catches only the devices that really have nothing.
     if (reason === 'pointer') {
       gate.innerHTML =
         '<div class="gate-panel">' +
-          '<h2 class="gate-title">MOUSE REQUIRED</h2>' +
-          '<p class="gate-body">The paddle follows a pointer, and this device ' +
-            'has none to follow. Star Catcher needs a mouse, trackpad or ' +
-            'stylus for now.</p>' +
-          '<p class="gate-body gate-dim">Touch controls are on the list.</p>' +
+          '<h2 class="gate-title">NO CONTROLS FOUND</h2>' +
+          '<p class="gate-body">The paddle needs either a pointer to follow ' +
+            'or a touchscreen to drag on, and this device reports neither.</p>' +
+          '<p class="gate-body gate-dim">A mouse, trackpad, stylus or ' +
+            'touchscreen will all work.</p>' +
+        '</div>';
+      return;
+    }
+
+    // v3.5 — rotating genuinely fixes it; apply() already checked.
+    if (reason === 'orientation') {
+      gate.innerHTML =
+        '<div class="gate-panel">' +
+          '<div class="gate-rotate-icon" aria-hidden="true">\u21bb</div>' +
+          '<h2 class="gate-title">ROTATE YOUR DEVICE</h2>' +
+          '<p class="gate-body">Star Catcher runs on a fixed ' + width() +
+            ' \u00d7 ' + height() + ' playfield so every pilot gets the same ' +
+            'game, and that shape only fits sideways.</p>' +
+          '<p class="gate-body gate-dim">Turn to landscape and the game picks ' +
+            'up straight away. If it stays put, your rotation lock is on.</p>' +
         '</div>';
       return;
     }
 
     // reason === 'small' — report the shortfall in the player's own CSS
     // pixels, since that is the number that matches what they can see.
-    const needW = Math.ceil(width()  * CONFIG.GAME.MIN_DEVICE_SCALE / ratio);
-    const needH = Math.ceil(height() * CONFIG.GAME.MIN_DEVICE_SCALE / ratio);
+    const floor = minScale();
+    const needW = Math.ceil(width()  * floor / ratio);
+    const needH = Math.ceil(height() * floor / ratio);
     const tooNarrow = availW < needW;
     const tooShort  = availH < needH;
     const fix = (tooNarrow && tooShort) ? 'bigger' : tooNarrow ? 'wider' : 'taller';
 
+    // The way out is different depending on what you're holding: there is no
+    // Ctrl-minus on a phone, and nothing to drag wider.
+    const advice = Platform.isTouchMode()
+      ? 'This screen is too small to show the playfield legibly, even sideways. ' +
+        'Star Catcher needs a larger device.'
+      : 'Make the window ' + fix + ', or zoom out with Ctrl and \u2212 ' +
+        '(\u2318 and \u2212 on a Mac). The game picks up the moment it fits.';
+
     gate.innerHTML =
       '<div class="gate-panel">' +
-        '<h2 class="gate-title">WINDOW TOO SMALL</h2>' +
+        '<h2 class="gate-title">' +
+          (Platform.isTouchMode() ? 'SCREEN TOO SMALL' : 'WINDOW TOO SMALL') +
+        '</h2>' +
         '<p class="gate-body">Star Catcher runs on a fixed ' + width() + ' \u00d7 ' +
           height() + ' playfield so every pilot gets the same game. This ' +
-          'window is too small to show it honestly.</p>' +
+          (Platform.isTouchMode() ? 'screen' : 'window') +
+          ' is too small to show it honestly.</p>' +
         '<div class="gate-metrics">' +
           '<div class="gate-metric"><span>YOU HAVE</span><b>' +
             Math.round(availW) + ' \u00d7 ' + Math.round(availH) + '</b></div>' +
           '<div class="gate-metric"><span>YOU NEED</span><b>' +
             needW + ' \u00d7 ' + needH + '</b></div>' +
         '</div>' +
-        '<p class="gate-body gate-dim">Make the window ' + fix +
-          ', or zoom out with Ctrl and \u2212 (\u2318 and \u2212 on a Mac). ' +
-          'The game picks up the moment it fits.</p>' +
+        '<p class="gate-body gate-dim">' + advice + '</p>' +
       '</div>';
   }
 
@@ -238,6 +333,26 @@ const Viewport = (() => {
     apply();
 
     window.addEventListener('resize', apply);
+
+    // v3.5 — mobile needs three extra sources of truth about its own size.
+    //
+    // `orientationchange` fires before the new dimensions are readable on
+    // several browsers, hence the deferred second pass rather than a bare
+    // handler. `visualViewport` is the only accurate report of the usable
+    // area once the address bar collapses or a keyboard slides up — the
+    // documentElement numbers lag it. And the mode itself can flip, which
+    // changes the floor and therefore possibly the gate.
+    window.addEventListener('orientationchange', () => {
+      apply();
+      setTimeout(apply, 120);
+      setTimeout(apply, 400);
+    });
+
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', apply);
+    }
+
+    Platform.onModeChange(apply);
 
     if (window.matchMedia) {
       // Zoom fires `resize`, but OS display-scaling changes and some zoom
@@ -269,7 +384,7 @@ const Viewport = (() => {
     offsetY:     () => offY,
     isBlocked:   () => blocked,
     blockReason: () => reason,
-    width, height, pixelRatio, hasFinePointer,
+    width, height, pixelRatio, hasFinePointer, minScale,
   };
 
   return api;
