@@ -2,6 +2,25 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+
+  <!-- v3.5 — WITHOUT THIS TAG NOTHING ELSE MEASURES CORRECTLY.
+       A mobile browser with no viewport meta lays out at a ~980px virtual
+       viewport and then shrinks the result, so documentElement.clientWidth
+       reports 980 on a 2400px phone. Every fit calculation in viewport.js
+       reads that number, so the playfield would be scaled against a width
+       that doesn't exist. `user-scalable=no` is here because pinch-zoom on a
+       fixed-size letterboxed playfield can only break the mapping between
+       finger and paddle; `viewport-fit=cover` fills the notch area. -->
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+
+  <!-- Landscape fullscreen-ish behaviour on iOS, and a dark chrome bar so the
+       letterbox doesn't sit against white. -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#111111">
+
   <title>Star Catcher</title>
   <link rel="icon" href="giz.ico">
   <link rel="stylesheet" href="style.css">
@@ -11,6 +30,14 @@
   <link rel="stylesheet" href="devtools.css">
 </head>
 <body>
+
+<!-- ══════════════════════════════════════════════════════════ APP SCALER ═══
+     v3.3 — everything the player sees lives at one fixed logical size and is
+     CSS-scaled to fit the window. Browser zoom and monitor width no longer
+     change the size of the playfield relative to the paddle. See viewport.js.
+     Deliberately NOT inside: the star cursor overlay (drawn in screen space)
+     and the dev console (should stay readable at 1:1). -->
+<div id="app-scaler">
 
 <!-- ═══════════════════════════════════════════════════════ START SCREEN ═══ -->
 <div id="start-screen">
@@ -50,6 +77,13 @@
 <!-- ══════════════════════════════════════════════════ LEADERBOARD SCREEN ═══ -->
 <div id="leaderboard-screen">
   <h2 class="lb-heading">★ HALL OF FAME ★</h2>
+
+  <!-- v3.5 — which INSTRUMENT the run was played with. Two separate tables;
+       game.js defaults the selection to however the viewer is playing. -->
+  <div class="lb-boards">
+    <button class="lb-board active" data-board="pointer">🖱 MOUSE</button>
+    <button class="lb-board"        data-board="touch">☝ TOUCH</button>
+  </div>
 
   <div class="lb-tabs">
     <button class="lb-tab active" data-tab="scores">TOP SCORES</button>
@@ -153,6 +187,23 @@
              autocomplete="off" placeholder="ANON" class="guest-name-input">
     </div>
     <p class="settings-hint settings-guest-hint">Remembered on this device so you don't retype it after every run.</p>
+  </div>
+
+  <!-- v3.5 — Controls. The whole section is hidden outside touch mode, since
+       a mouse player has nothing here to tune. -->
+  <div class="settings-section" id="settings-touch-section" style="display:none;">
+    <h3 class="settings-label">CONTROLS</h3>
+
+    <div class="settings-slider-row">
+      <span class="slider-label">Drag Sensitivity</span>
+      <input type="range" id="touch-sensitivity" min="6" max="30" step="1" value="18" class="settings-slider">
+      <span id="touch-sens-val" class="slider-value">1.8x</span>
+    </div>
+    <p class="settings-hint">
+      How far the paddle travels per centimetre of finger. Higher is faster to
+      the edges, lower is easier to place precisely. Drag anywhere on the
+      playfield — your finger doesn’t have to be on the paddle.
+    </p>
   </div>
 
   <!-- Visual settings -->
@@ -306,6 +357,12 @@
     </div>
   </div>
 
+  <!-- v3.5 — touch pause. Space is the only pause on desktop and a phone has
+       no space bar, so touch mode needs a real target. Hidden by default and
+       revealed by body.touch-mode; sits top-centre, clear of both HUD
+       columns and well away from where a thumb drags. -->
+  <button id="touch-pause-btn" class="touch-pause-btn" type="button" aria-label="Pause">‖</button>
+
   <!-- Paddle -->
   <div id="paddle-wrapper">
     <div id="paddle">
@@ -321,6 +378,15 @@
 <!-- Ratchet Cars easter egg mount point -->
 <div id="ratchet-cars-mount"></div>
 
+</div><!-- /app-scaler -->
+
+<!-- ═══════════════════════════════════════════════════ PLAYABILITY GATE ═══
+     v3.4 — shown when the window is too small to display the fixed playfield,
+     or when the device has no pointer to follow. Sits OUTSIDE #app-scaler on
+     purpose: it has to stay legible exactly when the scaler does not fit.
+     viewport.js owns its contents. -->
+<div id="viewport-gate" aria-hidden="true"></div>
+
 <!-- Star cursor overlay -->
 <canvas id="star-cursor-canvas"></canvas>
 
@@ -331,6 +397,8 @@
 
 <!-- Load modules in dependency order -->
 <script src="config.js"></script>
+<script src="platform.js"></script>
+<script src="viewport.js"></script>
 <script src="audio.js"></script>
 <script src="stages.js"></script>
 <script src="upgrades.js"></script>

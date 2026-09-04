@@ -23,10 +23,110 @@ const CONFIG = Object.freeze({
   GAME: {
     INITIAL_LIVES:     3,
     STAR_COUNT:        120,     // background twinkle stars (non-fancy mode)
+
+    // ───────────────────────────────────────────────────────────────────
+    // v3.3 — THE LOGICAL PLAYFIELD
+    //
+    // The game is authored at exactly this size and then CSS-scaled to fit
+    // the window (see viewport.js). Nothing inside the game ever measures
+    // the browser, so window size and browser zoom no longer change the
+    // difficulty — they only change how big the picture is.
+    //
+    // WIDTH is the number that matters. Every star position is normalised
+    // 0..1 and multiplied by it, while the paddle is a fixed PADDLE.
+    // BASE_WIDTH, so WIDTH alone decides what fraction of the field the
+    // paddle covers. Raising it makes the game harder for everyone;
+    // lowering it makes it easier. Changing it invalidates old scores.
+    //
+    // 1536 is a 1920x1080 monitor at the 125% display scaling Windows
+    // ships by default — the most common desktop playfield there is.
+    // ───────────────────────────────────────────────────────────────────
+    WIDTH:             1536,
     HEIGHT:            700,
+
+    // ───────────────────────────────────────────────────────────────────
+    // v3.4 — THE PLAYABILITY GATE
+    //
+    // Both numbers below are measured in DEVICE pixels per logical pixel,
+    // not CSS pixels. That distinction is the entire point: browser zoom
+    // moves CSS pixels and devicePixelRatio by the same factor in opposite
+    // directions, so a device-pixel measure is zoom-proof and a CSS-pixel
+    // one is not. viewport.js explains the arithmetic.
+    // ───────────────────────────────────────────────────────────────────
+
+    // Below this, the game refuses to run and shows the "window too small"
+    // gate instead of shrinking. 1.0 means "at least one device pixel per
+    // logical pixel", i.e. a 1536x700 device-pixel window. Shrinking below
+    // that is fair in logical terms but hands the player a playfield small
+    // enough to cross with a flick of the wrist, which is its own easy mode.
+    MIN_DEVICE_SCALE:  1.0,
+
+    // ───────────────────────────────────────────────────────────────────
+    // v3.5 — THE TOUCH FLOOR
+    //
+    // The desktop floor above is a FAIRNESS number: below 1.0 the playfield
+    // gets small enough that crossing it is a flick of the wrist instead of
+    // a sweep, which is a shorter game than everyone else is playing.
+    //
+    // That argument does not survive the move to touch. The paddle is
+    // driven by a finger DELTA multiplied by a sensitivity setting, so how
+    // far the paddle travels per centimetre of thumb has nothing to do with
+    // how many pixels the screen has. A smaller phone is not an easier
+    // game; it is the same game on a smaller picture.
+    //
+    // So the touch floor is a LEGIBILITY number instead: how small can a
+    // 16px star get before it stops being a fair target to see? 0.75 puts
+    // the hard cutoff at 1152 x 525 device pixels, which clears every phone
+    // in landscape back to roughly a 2016 handset, and still refuses the
+    // genuinely unplayable ones.
+    //
+    // Because the two floors mean different things, touch runs go to their
+    // own leaderboard. See CONFIG.SUPABASE.TABLE_TOUCH.
+    // ───────────────────────────────────────────────────────────────────
+    MIN_DEVICE_SCALE_TOUCH: 0.75,
+
+    // The ceiling is deliberately disabled, and it should stay that way.
+    // Any clamp on the display scale re-breaks zoom invariance: a capped
+    // game stops filling the window, so zooming out shrinks the picture
+    // again and shortens the mouse sweep. A tidier-looking HUD on an
+    // ultrawide is not worth reopening the exploit. Lower this only if you
+    // have decided you would rather have the looks than the fairness.
+    MAX_DEVICE_SCALE:  1000,
+
+    // Ceiling on canvas backing-store resolution (display scale x device
+    // pixel ratio). Keeps the starfield crisp when scaled up without
+    // asking a 4K panel to composite a canvas nobody can perceive.
+    MAX_CANVAS_RATIO:  2,
+
     // Legacy spawn constants — retained so nothing referencing them breaks.
     BASE_SPAWN_MS:     1000,
     MIN_SPAWN_MS:      250,
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // v3.5 — INPUT
+  //
+  // On a pointer device the paddle is ABSOLUTE: it sits under the cursor,
+  // full stop. On touch it is RELATIVE: it moves by the finger's delta from
+  // wherever the finger went down, so you can drag from anywhere on the
+  // playfield without your hand parked on top of the paddle you're aiming.
+  //
+  // SENSITIVITY is logical paddle pixels per logical pixel of finger travel.
+  // At 1.0 a drag across the full width of the screen moves the paddle the
+  // full width of the field — correct, but it means a full-screen swipe for
+  // every corner-to-corner save, which is not a thing a thumb can do. The
+  // default trades a little precision for a paddle you can actually get to
+  // the far edge of the field in one motion.
+  // ─────────────────────────────────────────────────────────────────────────
+  INPUT: {
+    TOUCH_SENSITIVITY:       1.8,
+    TOUCH_SENSITIVITY_MIN:   0.6,
+    TOUCH_SENSITIVITY_MAX:   3.0,
+    TOUCH_SENSITIVITY_STEP:  0.1,
+
+    // Ignore the first N logical px of a drag. Stops the paddle twitching
+    // when a finger lands, without adding perceptible lag to a real move.
+    TOUCH_DEADZONE_PX:       2,
   },
 
   OBJECTS: {
@@ -202,7 +302,26 @@ const CONFIG = Object.freeze({
   SUPABASE: {
     URL:       'https://frchqoajyygsmyknawnl.supabase.co',
     ANON_KEY:  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZyY2hxb2FqeXlnc215a25hd25sIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ4MzEwMjYsImV4cCI6MjA5MDQwNzAyNn0.nAUwYtILSH4az-ygpcIgJ5DQ8YlOMxGFsNUK-qFX-5o',
-    TABLE:     'scores',
+
+    // ───────────────────────────────────────────────────────────────────
+    // v3.5 — TWO BOARDS
+    //
+    // A mouse and a thumb are not the same instrument, and a single board
+    // would either bury every touch run under the desktop times or quietly
+    // suggest they were set the same way. Two tables, one per control
+    // scheme, and the UI shows which one you're looking at.
+    //
+    // TABLE is left named 'scores' rather than renamed to 'scores_pointer'
+    // so that every existing row and every existing RLS policy keeps
+    // working untouched. The new table is a structural copy — see the
+    // migration in the v3.5 notes.
+    //
+    // Which board a run lands on is decided by Platform.mode() AT RUN
+    // START, not by the device: a touchscreen laptop played with a mouse
+    // is a pointer run.
+    // ───────────────────────────────────────────────────────────────────
+    TABLE:        'scores',          // pointer / mouse / trackpad / stylus
+    TABLE_TOUCH:  'scores_touch',    // finger-dragged
   },
 
   E_E: {
