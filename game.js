@@ -257,12 +257,24 @@ window.addEventListener('load', () => {
 
   // ─── 2. GAME STATE ──────────────────────────────────────────────────────────
 
-  /** Cached layout dimensions — updated on resize and game start. */
+  /**
+   * Cached layout dimensions.
+   *
+   * v3.3 — containerW/H are the LOGICAL playfield size and never change,
+   * whatever the window is doing. They used to be read from the container's
+   * bounding rect, which is why browser zoom changed the difficulty.
+   *
+   * containerLeft/Top and scale describe where that logical box currently
+   * lands on the physical screen. They exist for exactly one purpose:
+   * turning pointer events back into logical coordinates. Nothing else in
+   * the game should read them.
+   */
   const layout = {
-    containerW:  0,
-    containerH:  0,
+    containerW:  CONFIG.GAME.WIDTH,
+    containerH:  CONFIG.GAME.HEIGHT,
     containerLeft: 0,
     containerTop:  0,
+    scale:         1,
   };
 
   /** Paddle position tracked in JS — no DOM reads needed during gameplay. */
@@ -273,9 +285,16 @@ window.addEventListener('load', () => {
   };
 
   function updateLayout() {
+    // The logical size is a constant. Only the mapping onto the screen moves.
+    layout.containerW = CONFIG.GAME.WIDTH;
+    layout.containerH = CONFIG.GAME.HEIGHT;
+    layout.scale      = Viewport.scale();
+
+    // getBoundingClientRect reports the SCALED box, which is what we want
+    // here — it is the screen-space origin we subtract from clientX/clientY.
+    // It reads as zeroes while the container is display:none, so the
+    // Viewport.onChange hook below re-runs this once a run is live.
     const rect = DOM.container.getBoundingClientRect();
-    layout.containerW    = rect.width;
-    layout.containerH    = rect.height;
     layout.containerLeft = rect.left;
     layout.containerTop  = rect.top;
   }
@@ -315,12 +334,23 @@ window.addEventListener('load', () => {
 
   let stars = [];
 
+  // v3.3 — the canvas backing store is now sized in DEVICE pixels while the
+  // starfield is positioned in LOGICAL ones, so these two are tracked
+  // separately instead of reading canvas.width for both.
+  let starW = 0, starH = 0;
+
   function initStars() {
-    DOM.canvas.width  = DOM.container.offsetWidth;
-    DOM.canvas.height = DOM.container.offsetHeight;
+    const ratio = Viewport.pixelRatio();
+    starW = DOM.container.offsetWidth;   // layout width — transforms don't
+    starH = DOM.container.offsetHeight;  // affect it, so this is logical
+
+    DOM.canvas.width  = Math.round(starW * ratio);
+    DOM.canvas.height = Math.round(starH * ratio);
+    canvasCtx.setTransform(ratio, 0, 0, ratio, 0, 0);
+
     stars = Array.from({ length: CONFIG.GAME.STAR_COUNT }, () => ({
-      x: Math.random() * DOM.canvas.width,
-      y: Math.random() * DOM.canvas.height,
+      x: Math.random() * starW,
+      y: Math.random() * starH,
       s: Math.random() * 2.5 + 0.5,
       o: Math.random(),
     }));
@@ -328,11 +358,11 @@ window.addEventListener('load', () => {
 
   function drawStars() {
     canvasCtx.fillStyle = '#000';
-    canvasCtx.fillRect(0, 0, DOM.canvas.width, DOM.canvas.height);
+    canvasCtx.fillRect(0, 0, starW, starH);
     stars.forEach(s => {
       canvasCtx.fillStyle = `rgba(255,255,255,${s.o})`;
       canvasCtx.fillRect(s.x, s.y, s.s, s.s);
-      s.y = (s.y + s.s * 0.4) % DOM.canvas.height;
+      s.y = (s.y + s.s * 0.4) % starH;
     });
     if (state.active && !state.paused) {
       state.starsRaf = requestAnimationFrame(drawStars);
@@ -393,7 +423,10 @@ window.addEventListener('load', () => {
 
   DOM.container.addEventListener('mousemove', e => {
     if (!state.active || state.paused) return;
-    const x    = e.clientX - layout.containerLeft;
+    // v3.3 — pointer events are in screen pixels; the playfield is in
+    // logical ones. Dividing by the scale is the whole conversion, and it
+    // is why zooming no longer buys anyone a wider paddle.
+    const x    = (e.clientX - layout.containerLeft) / layout.scale;
     const half = paddleState.width / 2;
     const clamped = Math.max(half, Math.min(x, layout.containerW - half));
     paddleState.x = clamped;
@@ -2018,8 +2051,16 @@ window.addEventListener('load', () => {
     beginStage(Dev.startStage(1));
   }
 
-  DOM.startGameBtn.addEventListener('click', startGame);
-  DOM.rebootBtn.addEventListener('click',    startGame);
+  // v3.4 — the gate covers the whole page, so these are unreachable while it
+  // is up. Guarded anyway: the buttons are still focusable by keyboard, and a
+  // run must never start into a window that can't display it fairly.
+  function startGameGuarded() {
+    if (Viewport.isBlocked()) return;
+    startGame();
+  }
+
+  DOM.startGameBtn.addEventListener('click', startGameGuarded);
+  DOM.rebootBtn.addEventListener('click',    startGameGuarded);
 
   // ─── 15. ??? ─────────────────────────────────────────────────────────
 
@@ -2251,14 +2292,33 @@ window.addEventListener('load', () => {
     }
   }, { once: true });
 
-  // Re-initialise star canvas on resize
-  window.addEventListener('resize', () => {
-    if (state.active) {
-      updateLayout();
-      resizeGameBG();
-    }
+  // v3.3 — the window changing no longer changes the playfield, only how it
+  // is projected onto the screen. Viewport.apply() has already run by the
+  // time this fires; all that is left is refreshing the screen-space origin
+  // and re-cutting the canvases at the new display resolution.
+  //
+  // Note what is NOT here any more: stars already in flight used to be left
+  // at stale absolute x positions by a mid-run resize. Their coordinates are
+  // logical now, so a resize mid-stage is genuinely inert.
+  Viewport.onChange(() => {
+    updateLayout();
+    if (state.active) resizeGameBG();
     TitleBG.resize();
   });
+
+  // v3.4 — the playability gate can slam shut mid-run if somebody drags the
+  // window smaller. Freeze the game when it does, or they lose lives behind
+  // an overlay they can't see through. Pausing with the menu visible means
+  // the existing resume path (and its 3-2-1 countdown) handles the way back
+  // in, so nobody gets dropped straight into a falling star.
+  Viewport.onBlockChange(blocked => {
+    if (blocked && state.active && !state.paused) pauseGame(true);
+  });
+
+  // A run that begins blocked never begins at all.
+  if (Viewport.isBlocked()) {
+    console.info('[Viewport] blocked at load:', Viewport.blockReason());
+  }
 
   // ─── 18. TITLE BACKGROUND ──────────────────────────────────────────────────
 

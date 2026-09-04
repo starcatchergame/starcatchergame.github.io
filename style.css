@@ -16,7 +16,98 @@
 
 /* ── Base ─────────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
-body { margin: 0; background: #111; }
+body {
+  margin: 0;
+  background: #111;
+  /* The scaler is fixed-position and always fits, so there is nothing to
+     scroll. This also removes the scrollbar, which was itself quietly
+     changing the playfield width by ~15px. */
+  overflow: hidden;
+}
+
+/* ── App Scaler (v3.3) ───────────────────────────────────────── */
+/* Fixed logical size, letterboxed and scaled to fit. viewport.js owns the
+   width/height/transform written here; the values below are only a sane
+   first paint before its first apply() lands. transform-origin must stay
+   at the top-left corner — the offsets are computed against it. */
+#app-scaler {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 1536px;
+  height: 700px;
+  transform-origin: 0 0;
+}
+
+/* ── Playability Gate (v3.4) ─────────────────────────────────────────────── */
+/* Never scaled, always on top. Deliberately plain: this is the one surface
+   that has to work when the rest of the layout cannot. */
+#viewport-gate {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 99998;   /* under the star cursor, over everything else */
+  background: #000;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  font-family: var(--font-game);
+  cursor: default;
+}
+
+.gate-panel {
+  max-width: 460px;
+  text-align: center;
+  border: 2px solid var(--cyan);
+  box-shadow: 0 0 40px rgba(0,255,204,0.25);
+  background: rgba(0,10,10,0.95);
+  padding: 32px 34px;
+}
+
+.gate-title {
+  margin: 0 0 16px;
+  font-size: 26px;
+  letter-spacing: 4px;
+  color: var(--cyan);
+  text-shadow: 0 0 18px var(--cyan);
+}
+
+.gate-body {
+  margin: 0 0 14px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: rgba(255,255,255,0.82);
+}
+
+.gate-body:last-child { margin-bottom: 0; }
+.gate-dim { color: rgba(255,255,255,0.5); font-size: 13px; }
+
+.gate-metrics {
+  display: flex;
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.gate-metric {
+  flex: 1;
+  border: 1px solid rgba(0,255,204,0.3);
+  background: rgba(0,255,204,0.06);
+  padding: 10px 8px;
+}
+
+.gate-metric span {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: rgba(255,255,255,0.45);
+  margin-bottom: 5px;
+}
+
+.gate-metric b {
+  font-size: 17px;
+  color: var(--cyan);
+  letter-spacing: 1px;
+}
 
 /* ── Star Cursor ──────────────────────────────────────────────────────────── */
 #star-cursor-canvas {
@@ -43,6 +134,9 @@ body.star-cursor-active a {
 }
 
 /* ── Shared screen shell ──────────────────────────────────────────────────── */
+/* Every screen fills the scaler, so `100%` is now a fixed logical width
+   (CONFIG.GAME.WIDTH) rather than whatever the browser window happens to
+   be. Height stays 700 to match CONFIG.GAME.HEIGHT. */
 #start-screen,
 #leaderboard-screen,
 #account-screen,

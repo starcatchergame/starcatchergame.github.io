@@ -12,6 +12,14 @@
 </head>
 <body>
 
+<!-- ══════════════════════════════════════════════════════════ APP SCALER ═══
+     v3.3 — everything the player sees lives at one fixed logical size and is
+     CSS-scaled to fit the window. Browser zoom and monitor width no longer
+     change the size of the playfield relative to the paddle. See viewport.js.
+     Deliberately NOT inside: the star cursor overlay (drawn in screen space)
+     and the dev console (should stay readable at 1:1). -->
+<div id="app-scaler">
+
 <!-- ═══════════════════════════════════════════════════════ START SCREEN ═══ -->
 <div id="start-screen">
   <canvas id="title-canvas"></canvas>
@@ -321,6 +329,15 @@
 <!-- Ratchet Cars easter egg mount point -->
 <div id="ratchet-cars-mount"></div>
 
+</div><!-- /app-scaler -->
+
+<!-- ═══════════════════════════════════════════════════ PLAYABILITY GATE ═══
+     v3.4 — shown when the window is too small to display the fixed playfield,
+     or when the device has no pointer to follow. Sits OUTSIDE #app-scaler on
+     purpose: it has to stay legible exactly when the scaler does not fit.
+     viewport.js owns its contents. -->
+<div id="viewport-gate" aria-hidden="true"></div>
+
 <!-- Star cursor overlay -->
 <canvas id="star-cursor-canvas"></canvas>
 
@@ -331,6 +348,7 @@
 
 <!-- Load modules in dependency order -->
 <script src="config.js"></script>
+<script src="viewport.js"></script>
 <script src="audio.js"></script>
 <script src="stages.js"></script>
 <script src="upgrades.js"></script>

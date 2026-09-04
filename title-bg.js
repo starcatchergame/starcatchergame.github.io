@@ -53,8 +53,22 @@ function createFancyBG(opts = {}) {
 
   function _resize() {
     const parent = _canvas.parentElement;
-    _w = _canvas.width  = parent.offsetWidth;
-    _h = _canvas.height = parent.offsetHeight;
+
+    // v3.3 — offsetWidth/Height are LAYOUT dimensions, so the app scaler's
+    // CSS transform doesn't touch them: these stay the logical playfield
+    // size no matter how the game is being displayed. All the drawing code
+    // below keeps working in those logical units.
+    _w = parent.offsetWidth;
+    _h = parent.offsetHeight;
+
+    // The backing store, though, wants the pixels that are actually on
+    // screen, or the nebulae go soft whenever the game is scaled up past
+    // 1:1. setTransform folds the difference back out so nothing else has
+    // to know about it.
+    const ratio = (typeof Viewport !== 'undefined') ? Viewport.pixelRatio() : 1;
+    _canvas.width  = Math.round(_w * ratio);
+    _canvas.height = Math.round(_h * ratio);
+    _ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   }
 
   function _buildStars() {

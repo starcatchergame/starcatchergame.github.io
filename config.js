@@ -23,7 +23,57 @@ const CONFIG = Object.freeze({
   GAME: {
     INITIAL_LIVES:     3,
     STAR_COUNT:        120,     // background twinkle stars (non-fancy mode)
+
+    // ───────────────────────────────────────────────────────────────────
+    // v3.3 — THE LOGICAL PLAYFIELD
+    //
+    // The game is authored at exactly this size and then CSS-scaled to fit
+    // the window (see viewport.js). Nothing inside the game ever measures
+    // the browser, so window size and browser zoom no longer change the
+    // difficulty — they only change how big the picture is.
+    //
+    // WIDTH is the number that matters. Every star position is normalised
+    // 0..1 and multiplied by it, while the paddle is a fixed PADDLE.
+    // BASE_WIDTH, so WIDTH alone decides what fraction of the field the
+    // paddle covers. Raising it makes the game harder for everyone;
+    // lowering it makes it easier. Changing it invalidates old scores.
+    //
+    // 1536 is a 1920x1080 monitor at the 125% display scaling Windows
+    // ships by default — the most common desktop playfield there is.
+    // ───────────────────────────────────────────────────────────────────
+    WIDTH:             1536,
     HEIGHT:            700,
+
+    // ───────────────────────────────────────────────────────────────────
+    // v3.4 — THE PLAYABILITY GATE
+    //
+    // Both numbers below are measured in DEVICE pixels per logical pixel,
+    // not CSS pixels. That distinction is the entire point: browser zoom
+    // moves CSS pixels and devicePixelRatio by the same factor in opposite
+    // directions, so a device-pixel measure is zoom-proof and a CSS-pixel
+    // one is not. viewport.js explains the arithmetic.
+    // ───────────────────────────────────────────────────────────────────
+
+    // Below this, the game refuses to run and shows the "window too small"
+    // gate instead of shrinking. 1.0 means "at least one device pixel per
+    // logical pixel", i.e. a 1536x700 device-pixel window. Shrinking below
+    // that is fair in logical terms but hands the player a playfield small
+    // enough to cross with a flick of the wrist, which is its own easy mode.
+    MIN_DEVICE_SCALE:  1.0,
+
+    // The ceiling is deliberately disabled, and it should stay that way.
+    // Any clamp on the display scale re-breaks zoom invariance: a capped
+    // game stops filling the window, so zooming out shrinks the picture
+    // again and shortens the mouse sweep. A tidier-looking HUD on an
+    // ultrawide is not worth reopening the exploit. Lower this only if you
+    // have decided you would rather have the looks than the fairness.
+    MAX_DEVICE_SCALE:  1000,
+
+    // Ceiling on canvas backing-store resolution (display scale x device
+    // pixel ratio). Keeps the starfield crisp when scaled up without
+    // asking a 4K panel to composite a canvas nobody can perceive.
+    MAX_CANVAS_RATIO:  2,
+
     // Legacy spawn constants — retained so nothing referencing them breaks.
     BASE_SPAWN_MS:     1000,
     MIN_SPAWN_MS:      250,
